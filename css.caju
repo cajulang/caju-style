@@ -1,0 +1,1373 @@
+# The compiler of caju style: turns the defs registered with the style module into a stylesheet.
+#   import "github.com/aecdanjundex/caju-style/css"
+#   fs.write_file("public/site.css", css.compile(style.registry()), 420)
+# It does not import the style module (a program can use both by path or as a package): the
+# registry comes as plain values.
+import "std/strings"
+
+struct Def {
+  layer: str
+  name: str
+  selector: str
+  utilities: str
+}
+
+let reg_defs: []*Def = []*Def{}
+let reg_raws: []str = []str{}
+
+export struct Decl {
+  prop: str
+  value: str
+  important: bool
+  supports: str      # "": always; otherwise the @supports condition (the color-mix of /opacity)
+  rank: int          # the output order: the utility's place in the property order, then the
+  idx: int           # declaration's place in the utility (each utility keeps its own order)
+}
+
+let used_vars = map[str]bool{}
+let animations = map[str]bool{}
+let theme_vars = map[str]str{}
+let theme_inline = map[str]bool{}
+let custom_variants = map[str][]str{}
+let custom_order: []str = []str{}
+
+# the registry (style.registry()), with the theme's defaults added
+fn load(reg: map[str]any) {
+  reg_defs = []*Def{}
+  for _, x := range reg["defs"].([]any) {
+    f := x.([]any)
+    reg_defs = append(reg_defs, &Def{layer: f[0].(str), name: f[1].(str), selector: f[2].(str), utilities: f[3].(str)})
+  }
+  reg_raws = reg["raws"].([]str)
+  theme_vars = map[str]str{}
+  theme_inline = map[str]bool{}
+  inline := reg["inline"].(map[str]bool)
+  for k, v := range reg["theme"].(map[str]str) {
+    theme_vars[k] = v
+    theme_inline[k] = inline[k]
+  }
+  custom_variants = map[str][]str{}
+  for name, sels := range reg["variants"].(map[str][]str) { custom_variants[name] = sels }
+  custom_order = reg["order"].([]str)
+  defaults_loaded = false
+  defaults()
+}
+
+# ---------------------------------------------------------------------------------------------
+# The default theme (the parts of Tailwind's that utilities refer to)
+
+let defaults_loaded: bool = false
+
+fn defaults() {
+  if defaults_loaded { return }
+  defaults_loaded = true
+  dt := fn(k: str, v: str) {
+    if _, ok := theme_vars[k]; !ok {
+      theme_vars[k] = v
+      theme_inline[k] = false
+    }
+  }
+  dt("spacing", "0.25rem")
+  dt("color-black", "#000")
+  dt("color-white", "#fff")
+  dt("font-sans", "ui-sans-serif, system-ui, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\"")
+  dt("font-mono", "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace")
+  for _, c := range []str{"3xs 16rem", "2xs 18rem", "xs 20rem", "sm 24rem", "md 28rem", "lg 32rem", "xl 36rem", "2xl 42rem", "3xl 48rem", "4xl 56rem", "5xl 64rem", "6xl 72rem", "7xl 80rem"} {
+    p := strings.split(c, " ")
+    dt("container-" + p[0], p[1])
+  }
+  for _, t := range []str{"xs 0.75rem calc(1_/_0.75)", "sm 0.875rem calc(1.25_/_0.875)", "base 1rem calc(1.5_/_1)", "lg 1.125rem calc(1.75_/_1.125)", "xl 1.25rem calc(1.75_/_1.25)", "2xl 1.5rem calc(2_/_1.5)", "3xl 1.875rem calc(2.25_/_1.875)", "4xl 2.25rem calc(2.5_/_2.25)", "5xl 3rem 1", "6xl 3.75rem 1", "7xl 4.5rem 1", "8xl 6rem 1", "9xl 8rem 1"} {
+    p := strings.split(t, " ")
+    dt("text-" + p[0], p[1])
+    dt("text-" + p[0] + "--line-height", strings.replace_all(p[2], "_", " "))
+  }
+  for _, w := range []str{"thin 100", "extralight 200", "light 300", "normal 400", "medium 500", "semibold 600", "bold 700", "extrabold 800", "black 900"} {
+    p := strings.split(w, " ")
+    dt("font-weight-" + p[0], p[1])
+  }
+  for _, l := range []str{"tight 1.25", "snug 1.375", "normal 1.5", "relaxed 1.625", "loose 2"} {
+    p := strings.split(l, " ")
+    dt("leading-" + p[0], p[1])
+  }
+  for _, l := range []str{"tighter -0.05em", "tight -0.025em", "normal 0em", "wide 0.025em", "wider 0.05em", "widest 0.1em"} {
+    p := strings.split(l, " ")
+    dt("tracking-" + p[0], p[1])
+  }
+  for _, r := range []str{"xs 0.125rem", "sm 0.25rem", "md 0.375rem", "lg 0.5rem", "xl 0.75rem", "2xl 1rem", "3xl 1.5rem", "4xl 2rem"} {
+    p := strings.split(r, " ")
+    dt("radius-" + p[0], p[1])
+  }
+  dt("ease-in", "cubic-bezier(0.4, 0, 1, 1)")
+  dt("ease-out", "cubic-bezier(0, 0, 0.2, 1)")
+  dt("ease-in-out", "cubic-bezier(0.4, 0, 0.2, 1)")
+  dt("animate-spin", "spin 1s linear infinite")
+  dt("animate-ping", "ping 1s cubic-bezier(0, 0, 0.2, 1) infinite")
+  dt("animate-pulse", "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite")
+  dt("blur-xs", "4px")
+  dt("blur-sm", "8px")
+  dt("blur-md", "12px")
+  dt("blur-lg", "16px")
+  dt("default-transition-duration", "150ms")
+  dt("default-transition-timing-function", "cubic-bezier(0.4, 0, 0.2, 1)")
+  dt("default-font-family", "var(--font-sans)")
+  dt("default-mono-font-family", "var(--font-mono)")
+  for _, b := range []str{"sm 40rem", "md 48rem", "lg 64rem", "xl 80rem", "2xl 96rem"} {
+    p := strings.split(b, " ")
+    dt("breakpoint-" + p[0], p[1])
+  }
+  if _, ok := custom_variants["dark"]; !ok { custom_variants["dark"] = []str{"&:is(.dark *)"} }
+}
+
+fn has_theme(k: str) -> bool {
+  _, ok := theme_vars[k]
+  return ok
+}
+
+# a theme value as utilities write it: the value itself (inline) or var(--k)
+fn tv(k: str) -> str {
+  if theme_inline[k] { return theme_vars[k] }
+  used_vars[k] = true
+  return "var(--" + k + ")"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Values
+
+fn is_digit(c: int) -> bool { return c >= '0' && c <= '9' }
+
+# a number like 3, 2.5, 0.5
+fn is_number(s: str) -> bool {
+  if s == "" { return false }
+  dot := false
+  for i := 0; i < len(s); i++ {
+    c := int(s[i])
+    if c == '.' {
+      if dot { return false }
+      dot = true
+    } else if !is_digit(c) {
+      return false
+    }
+  }
+  return true
+}
+
+fn is_fraction(s: str) -> bool {
+  i := strings.index(s, "/")
+  return i > 0 && is_number(s[0:i]) && is_number(s[i + 1:])
+}
+
+# [value]: underscores are spaces (\_ is an underscore)
+fn arbitrary(s: str) -> str {
+  v := s[1:len(s) - 1]
+  b := strings.Builder{}
+  for i := 0; i < len(v); i++ {
+    c := int(v[i])
+    if c == '\\' && i + 1 < len(v) && int(v[i + 1]) == '_' {
+      b.write_byte('_')
+      i++
+    } else if c == '_' {
+      b.write_byte(32)
+    } else {
+      b.write_byte(c)
+    }
+  }
+  out := b.string()
+  # Tailwind puts spaces around the operators of calc() and the arguments of min()/max()
+  out = strings.replace_all(out, ",12px", ", 12px")
+  return out
+}
+
+fn is_arb(s: str) -> bool { return strings.has_prefix(s, "[") && strings.has_suffix(s, "]") }
+fn is_var(s: str) -> bool { return strings.has_prefix(s, "(") && strings.has_suffix(s, ")") }
+fn var_of(s: str) -> str { return "var(" + s[1:len(s) - 1] + ")" }
+
+# a length on the spacing scale: 3 -> calc(var(--spacing) * 3); also px, fractions, [x], (--x)
+fn spacing(v: str, neg: bool) -> str {
+  if is_arb(v) {
+    a := arbitrary(v)
+    if neg { return "calc(" + a + " * -1)" }
+    return a
+  }
+  if is_var(v) { return var_of(v) }
+  if v == "px" {
+    if neg { return "-1px" }
+    return "1px"
+  }
+  if v == "0" { return "0px" }
+  if is_number(v) {
+    used_vars["spacing"] = true
+    if v == "1" && !neg { return "var(--spacing)" }
+    if neg { return "calc(var(--spacing) * -" + v + ")" }
+    return "calc(var(--spacing) * " + v + ")"
+  }
+  if is_fraction(v) {
+    i := strings.index(v, "/")
+    f := "calc(" + v[0:i] + " / " + v[i + 1:] + " * 100%)"
+    if neg { return "calc(" + f + " * -1)" }
+    return f
+  }
+  if v == "full" { return "100%" }
+  if v == "auto" { return "auto" }
+  return ""
+}
+
+# sizes for width/height and friends
+fn size(v: str, axis: str) -> str {
+  s := spacing(v, false)
+  if s != "" { return s }
+  switch v {
+  case "screen":
+    if axis == "w" { return "100vw" }
+    return "100vh"
+  case "dvh": return "100dvh"
+  case "svh": return "100svh"
+  case "lvh": return "100lvh"
+  case "dvw": return "100dvw"
+  case "min": return "min-content"
+  case "max": return "max-content"
+  case "fit": return "fit-content"
+  case "none": return "none"
+  }
+  if has_theme("container-" + v) { return tv("container-" + v) }
+  return ""
+}
+
+struct Color {
+  value: str       # the color at full opacity
+  mixable: bool    # a var(): with /opacity, color-mix behind @supports
+  literal: str     # for theme colors that are not inline: the literal value (fallback)
+}
+
+fn color(v: str) -> *Color {
+  if v == "transparent" { return &Color{value: "transparent"} }
+  if v == "current" { return &Color{value: "currentcolor"} }
+  if v == "inherit" { return &Color{value: "inherit"} }
+  if is_arb(v) {
+    a := arbitrary(v)
+    if strings.has_prefix(a, "color:") { a = a[6:] }
+    if strings.has_prefix(a, "#") || strings.has_prefix(a, "rgb") || strings.has_prefix(a, "hsl") || strings.has_prefix(a, "oklch") || strings.has_prefix(a, "var(") {
+      return &Color{value: a, mixable: strings.has_prefix(a, "var(")}
+    }
+    return nil
+  }
+  if is_var(v) { return &Color{value: var_of(v), mixable: true} }
+  k := "color-" + v
+  if !has_theme(k) { return nil }
+  val := theme_vars[k]
+  if theme_inline[k] { return &Color{value: val, mixable: strings.has_prefix(val, "var(")} }
+  used_vars[k] = true
+  return &Color{value: "var(--" + k + ")", mixable: true, literal: val}
+}
+
+# prop: color, with an optional /opacity
+fn color_decls(prop: str, v: str) -> []Decl {
+  op := ""
+  i := strings.last_index(v, "/")
+  if i > 0 && !is_arb(v[i:]) && !strings.has_suffix(v, "]") || (i > 0 && strings.has_suffix(v, "]") && strings.last_index(v, "]") < i) {
+    op = v[i + 1:]
+    v = v[0:i]
+  }
+  c := color(v)
+  if c == nil { return nil }
+  if op == "" { return []Decl{Decl{prop: prop, value: c.value}} }
+  pct := op + "%"
+  if is_arb(op) { pct = arbitrary(op) }
+  mix := "color-mix(in oklab, " + c.value + " " + pct + ", transparent)"
+  if c.literal != "" {
+    return []Decl{
+      Decl{prop: prop, value: "color-mix(in srgb, " + c.literal + " " + pct + ", transparent)"},
+      Decl{prop: prop, value: mix, supports: "(color: color-mix(in lab, red, red))"},
+    }
+  }
+  if !c.mixable { return []Decl{Decl{prop: prop, value: mix}} }
+  return []Decl{Decl{prop: prop, value: c.value}, Decl{prop: prop, value: mix, supports: "(color: color-mix(in lab, red, red))"}}
+}
+
+fn d(prop: str, value: str) -> Decl { return Decl{prop: prop, value: value} }
+fn one(prop: str, value: str) -> []Decl { return []Decl{d(prop, value)} }
+
+const SHADOW = "var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow)"
+const BACKDROP = "var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,)"
+const TRANSITION_COLORS = "color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to"
+const ENTER = "enter var(--tw-animation-duration,var(--tw-duration,.15s))var(--tw-ease,ease)var(--tw-animation-delay,0s)var(--tw-animation-iteration-count,1)var(--tw-animation-direction,normal)var(--tw-animation-fill-mode,none)"
+const EXIT = "exit var(--tw-animation-duration,var(--tw-duration,.15s))var(--tw-ease,ease)var(--tw-animation-delay,0s)var(--tw-animation-iteration-count,1)var(--tw-animation-direction,normal)var(--tw-animation-fill-mode,none)"
+
+fn transition(props: str) -> []Decl {
+  return []Decl{
+    d("transition-property", props),
+    d("transition-timing-function", "var(--tw-ease, var(--default-transition-timing-function))"),
+    d("transition-duration", "var(--tw-duration, var(--default-transition-duration))"),
+  }
+}
+
+fn ring_width(w: str) -> []Decl {
+  return []Decl{d("--tw-ring-shadow", "var(--tw-ring-inset,) 0 0 0 calc(" + w + " + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor)"), d("box-shadow", SHADOW)}
+}
+
+# a shadow whose colors become var(--tw-shadow-color, color)
+fn shadow_value(v: str) -> str {
+  parts := []str{}
+  depth := 0
+  start := 0
+  for i := 0; i < len(v); i++ {
+    c := int(v[i])
+    if c == '(' { depth++ }
+    if c == ')' { depth-- }
+    if c == ',' && depth == 0 {
+      parts = append(parts, v[start:i])
+      start = i + 1
+    }
+  }
+  parts = append(parts, v[start:])
+  out := []str{}
+  for _, p := range parts {
+    p = strings.trim_space(p)
+    # the color is the last word (#hex, rgb(...), var(...), a name)
+    k := len(p)
+    depth = 0
+    j := k - 1
+    while j >= 0 {
+      c := int(p[j])
+      if c == ')' { depth++ }
+      if c == '(' { depth-- }
+      if c == 32 && depth == 0 { break }
+      j--
+    }
+    col := p[j + 1:]
+    if strings.has_prefix(col, "#") || strings.has_prefix(col, "rgb") || strings.has_prefix(col, "var(") || strings.has_prefix(col, "hsl") || strings.has_prefix(col, "oklch") {
+      out = append(out, p[0:j + 1] + "var(--tw-shadow-color, " + col + ")")
+    } else {
+      out = append(out, p)
+    }
+  }
+  return strings.join(out, ", ")
+}
+
+let SIDES = map[str]str{"t": "top", "r": "right", "b": "bottom", "l": "left"}
+
+fn radius_value(v: str) -> str {
+  if v == "" { return "0.25rem" }
+  if v == "none" { return "0" }
+  if v == "full" { return "calc(infinity * 1px)" }
+  if is_arb(v) { return arbitrary(v) }
+  if is_var(v) { return var_of(v) }
+  if has_theme("radius-" + v) { return tv("radius-" + v) }
+  return ""
+}
+
+fn border_width(v: str) -> str {
+  if v == "" { return "1px" }
+  if is_number(v) { return v + "px" }
+  if is_arb(v) { return arbitrary(v) }
+  return ""
+}
+
+# the declarations of one utility (without its variants), or nil if it is not one
+fn utility(u: str) -> []Decl {
+  neg := false
+  if strings.has_prefix(u, "-") {
+    neg = true
+    u = u[1:]
+  }
+  # [property:value]
+  if is_arb(u) {
+    inner := u[1:len(u) - 1]
+    k := strings.index(inner, ":")
+    if k <= 0 { return nil }
+    val := arbitrary("[" + inner[k + 1:] + "]")
+    # --spacing(4) -> calc(var(--spacing) * 4)
+    if strings.has_prefix(val, "--spacing(") {
+      used_vars["spacing"] = true
+      val = "calc(var(--spacing) * " + val[10:len(val) - 1] + ")"
+    }
+    return one(inner[0:k], val)
+  }
+  switch u {
+  case "block", "inline", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "contents", "table", "table-row", "table-cell", "table-caption", "flow-root", "list-item":
+    return one("display", u)
+  case "hidden": return one("display", "none")
+  case "static", "fixed", "absolute", "relative", "sticky": return one("position", u)
+  case "sr-only":
+    return []Decl{d("position", "absolute"), d("width", "1px"), d("height", "1px"), d("padding", "0"), d("margin", "-1px"), d("overflow", "hidden"), d("clip-path", "inset(50%)"), d("white-space", "nowrap"), d("border-width", "0")}
+  case "not-sr-only":
+    return []Decl{d("position", "static"), d("width", "auto"), d("height", "auto"), d("padding", "0"), d("margin", "0"), d("overflow", "visible"), d("clip-path", "none"), d("white-space", "normal")}
+  case "italic": return one("font-style", "italic")
+  case "not-italic": return one("font-style", "normal")
+  case "uppercase", "lowercase", "capitalize": return one("text-transform", u)
+  case "underline", "overline", "line-through": return one("text-decoration-line", u)
+  case "no-underline": return one("text-decoration-line", "none")
+  case "truncate": return []Decl{d("overflow", "hidden"), d("text-overflow", "ellipsis"), d("white-space", "nowrap")}
+  case "break-all": return one("word-break", "break-all")
+  case "break-words": return one("overflow-wrap", "break-word")
+  case "text-balance": return one("text-wrap", "balance")
+  case "text-pretty": return one("text-wrap", "pretty")
+  case "flex-1": return one("flex", "1")
+  case "flex-auto": return one("flex", "auto")
+  case "flex-none": return one("flex", "none")
+  case "flex-col": return one("flex-direction", "column")
+  case "flex-row": return one("flex-direction", "row")
+  case "flex-wrap": return one("flex-wrap", "wrap")
+  case "flex-nowrap": return one("flex-wrap", "nowrap")
+  case "shrink-0": return one("flex-shrink", "0")
+  case "shrink": return one("flex-shrink", "1")
+  case "grow": return one("flex-grow", "1")
+  case "grow-0": return one("flex-grow", "0")
+  case "grid-flow-col": return one("grid-auto-flow", "column")
+  case "grid-flow-row": return one("grid-auto-flow", "row")
+  case "auto-cols-fr": return one("grid-auto-columns", "minmax(0, 1fr)")
+  case "auto-rows-min": return one("grid-auto-rows", "min-content")
+  case "auto-rows-fr": return one("grid-auto-rows", "minmax(0, 1fr)")
+  case "list-disc": return one("list-style-type", "disc")
+  case "list-decimal": return one("list-style-type", "decimal")
+  case "list-none": return one("list-style-type", "none")
+  case "caption-top": return one("caption-side", "top")
+  case "caption-bottom": return one("caption-side", "bottom")
+  case "select-none": return []Decl{d("-webkit-user-select", "none"), d("user-select", "none")}
+  case "select-all": return []Decl{d("-webkit-user-select", "all"), d("user-select", "all")}
+  case "resize-none": return one("resize", "none")
+  case "bg-clip-padding": return one("background-clip", "padding-box")
+  case "bg-clip-border": return one("background-clip", "border-box")
+  case "bg-clip-text": return []Decl{d("-webkit-background-clip", "text"), d("background-clip", "text")}
+  case "border-dashed", "border-solid", "border-dotted", "border-none":
+    s := u[7:]
+    return []Decl{d("--tw-border-style", s), d("border-style", s)}
+  case "outline-none": return []Decl{d("--tw-outline-style", "none"), d("outline-style", "none")}
+  case "outline-hidden": return []Decl{d("--tw-outline-style", "none"), d("outline-style", "none"), Decl{prop: "outline", value: "2px solid transparent", supports: "@media (forced-colors: active)"}, Decl{prop: "outline-offset", value: "2px", supports: "@media (forced-colors: active)"}}
+  case "outline": return []Decl{d("outline-style", "var(--tw-outline-style)"), d("outline-width", "1px")}
+  case "transition": return transition("color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, box-shadow, transform, translate, scale, rotate, filter, -webkit-backdrop-filter, backdrop-filter, display, content-visibility, overlay, pointer-events")
+  case "transition-all": return transition("all")
+  case "transition-colors": return transition(TRANSITION_COLORS)
+  case "transition-opacity": return transition("opacity")
+  case "transition-transform": return transition("transform, translate, scale, rotate")
+  case "transition-none": return one("transition-property", "none")
+  case "transform": return one("transform", "var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,)")
+  case "animate-in":
+    animations["enter"] = true
+    return one("animation", ENTER)
+  case "animate-out":
+    animations["exit"] = true
+    return one("animation", EXIT)
+  case "animate-none": return one("animation", "none")
+  case "backdrop-blur": return []Decl{d("--tw-backdrop-blur", "blur(8px)"), d("-webkit-backdrop-filter", BACKDROP), d("backdrop-filter", BACKDROP)}
+  case "shadow": return []Decl{d("--tw-shadow", "0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1))"), d("box-shadow", SHADOW)}
+  case "shadow-sm": return []Decl{d("--tw-shadow", "0 1px 3px 0 var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 1px 2px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1))"), d("box-shadow", SHADOW)}
+  case "shadow-md": return []Decl{d("--tw-shadow", "0 4px 6px -1px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 2px 4px -2px var(--tw-shadow-color, rgb(0 0 0 / 0.1))"), d("box-shadow", SHADOW)}
+  case "shadow-lg": return []Decl{d("--tw-shadow", "0 10px 15px -3px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 4px 6px -4px var(--tw-shadow-color, rgb(0 0 0 / 0.1))"), d("box-shadow", SHADOW)}
+  case "shadow-xl": return []Decl{d("--tw-shadow", "0 20px 25px -5px var(--tw-shadow-color, rgb(0 0 0 / 0.1)), 0 8px 10px -6px var(--tw-shadow-color, rgb(0 0 0 / 0.1))"), d("box-shadow", SHADOW)}
+  case "shadow-none": return []Decl{d("--tw-shadow", "0 0 #0000"), d("box-shadow", SHADOW)}
+  case "ring": return ring_width("1px")
+  case "underline-offset-auto": return one("text-underline-offset", "auto")
+  case "rounded": return one("border-radius", radius_value(""))
+  case "border": return []Decl{d("border-style", "var(--tw-border-style)"), d("border-width", "1px")}
+  case "border-x": return []Decl{d("border-inline-style", "var(--tw-border-style)"), d("border-inline-width", "1px")}
+  case "border-y": return []Decl{d("border-block-style", "var(--tw-border-style)"), d("border-block-width", "1px")}
+  case "border-t", "border-r", "border-b", "border-l":
+    side := SIDES[u[7:]]
+    return []Decl{d("border-" + side + "-style", "var(--tw-border-style)"), d("border-" + side + "-width", "1px")}
+  case "pointer-events-none": return one("pointer-events", "none")
+  case "pointer-events-auto": return one("pointer-events", "auto")
+  case "grid-cols-none": return one("grid-template-columns", "none")
+  }
+  dash := strings.index(u, "-")
+  if dash < 0 { return nil }
+  # the longest prefix that names a utility family
+  fams := []str{"inset-x", "inset-y", "inset", "top", "right", "bottom", "left", "z", "order", "grid-cols", "grid-rows", "col-span", "row-span", "gap-x", "gap-y", "gap", "size", "min-w", "min-h", "max-w", "max-h", "w", "h", "px", "py", "pt", "pr", "pb", "pl", "p", "mx", "my", "mt", "mr", "mb", "ml", "m", "overflow-x", "overflow-y", "overflow", "items", "justify", "self", "place-items", "content", "text", "font", "leading", "tracking", "whitespace", "align", "bg", "border-x", "border-y", "border-t", "border-r", "border-b", "border-l", "border", "rounded-t", "rounded-r", "rounded-b", "rounded-l", "rounded", "ring-offset", "ring", "shadow", "outline-offset", "outline", "opacity", "duration", "delay", "ease", "animate", "fade-in", "fade-out", "zoom-in", "zoom-out", "slide-in-from-top", "slide-in-from-bottom", "slide-in-from-left", "slide-in-from-right", "slide-out-to-top", "slide-out-to-bottom", "slide-out-to-left", "slide-out-to-right", "translate-x", "translate-y", "backdrop-blur", "cursor", "fill", "stroke", "caret", "accent", "decoration", "underline-offset", "origin", "scroll-mt", "scroll-mb", "scroll-pt", "flex", "basis", "line-clamp", "aspect", "object", "list", "will-change", "@container"}
+  fam := ""
+  for _, f := range fams {
+    if strings.has_prefix(u, f + "-") || (f == "@container" && strings.has_prefix(u, "@container")) {
+      fam = f
+      break
+    }
+  }
+  if fam == "" { return nil }
+  v := ""
+  if fam == "@container" {
+    v = strings.trim_prefix(u, "@container")
+    if strings.has_prefix(v, "/") { return []Decl{d("container-type", "inline-size"), d("container-name", v[1:])} }
+    return one("container-type", "inline-size")
+  }
+  v = u[len(fam) + 1:]
+  switch fam {
+  case "inset", "top", "right", "bottom", "left":
+    s := spacing(v, neg)
+    if s == "" { return nil }
+    return one(fam, s)
+  case "inset-x":
+    return one("inset-inline", spacing(v, neg))
+  case "inset-y":
+    return one("inset-block", spacing(v, neg))
+  case "z":
+    if is_number(v) { return one("z-index", v) }
+    if v == "auto" { return one("z-index", "auto") }
+    if is_arb(v) { return one("z-index", arbitrary(v)) }
+  case "order":
+    if is_number(v) { return one("order", v) }
+  case "grid-cols", "grid-rows":
+    prop := "grid-template-columns"
+    if fam == "grid-rows" { prop = "grid-template-rows" }
+    if is_number(v) { return one(prop, "repeat(" + v + ", minmax(0, 1fr))") }
+    if is_arb(v) { return one(prop, arbitrary(v)) }
+  case "col-span":
+    if is_number(v) { return one("grid-column", "span " + v + " / span " + v) }
+    if v == "full" { return one("grid-column", "1 / -1") }
+  case "row-span":
+    if is_number(v) { return one("grid-row", "span " + v + " / span " + v) }
+  case "gap":
+    return one("gap", spacing(v, false))
+  case "gap-x":
+    return one("column-gap", spacing(v, false))
+  case "gap-y":
+    return one("row-gap", spacing(v, false))
+  case "size":
+    s := size(v, "w")
+    if s == "" { return nil }
+    return []Decl{d("width", s), d("height", s)}
+  case "w", "min-w", "max-w":
+    s := size(v, "w")
+    if s == "" { return nil }
+    return one(map[str]str{"w": "width", "min-w": "min-width", "max-w": "max-width"}[fam], s)
+  case "h", "min-h", "max-h":
+    s := size(v, "h")
+    if s == "" { return nil }
+    return one(map[str]str{"h": "height", "min-h": "min-height", "max-h": "max-height"}[fam], s)
+  case "p", "px", "py", "pt", "pr", "pb", "pl", "m", "mx", "my", "mt", "mr", "mb", "ml":
+    s := spacing(v, neg)
+    if s == "" { return nil }
+    kind := "padding"
+    if int(fam[0]) == 'm' { kind = "margin" }
+    switch fam[1:] {
+    case "": return one(kind, s)
+    case "x": return one(kind + "-inline", s)
+    case "y": return one(kind + "-block", s)
+    case "t": return one(kind + "-top", s)
+    case "r": return one(kind + "-right", s)
+    case "b": return one(kind + "-bottom", s)
+    case "l": return one(kind + "-left", s)
+    }
+  case "overflow", "overflow-x", "overflow-y":
+    return one(fam, v)
+  case "items":
+    return one("align-items", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "baseline": "baseline", "stretch": "stretch"}[v])
+  case "justify":
+    return one("justify-content", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "between": "space-between", "around": "space-around", "evenly": "space-evenly", "stretch": "stretch"}[v])
+  case "self":
+    return one("align-self", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "auto": "auto", "stretch": "stretch", "baseline": "baseline"}[v])
+  case "place-items":
+    return one("place-items", v)
+  case "text":
+    switch v {
+    case "left", "center", "right", "justify", "start", "end": return one("text-align", v)
+    }
+    if has_theme("text-" + v) && !has_theme("color-" + v) {
+      return []Decl{d("font-size", tv("text-" + v)), d("line-height", "var(--tw-leading, " + tvar("text-" + v + "--line-height") + ")")}
+    }
+    if is_arb(v) {
+      a := arbitrary(v)
+      if strings.has_prefix(a, "length:") { return one("font-size", a[7:]) }
+      if len(a) > 0 && (is_digit(int(a[0])) || int(a[0]) == '.') { return one("font-size", a) }
+    }
+    return color_decls("color", v)
+  case "font":
+    if has_theme("font-weight-" + v) { return []Decl{d("--tw-font-weight", tv("font-weight-" + v)), d("font-weight", tv("font-weight-" + v))} }
+    if has_theme("font-" + v) { return one("font-family", tv("font-" + v)) }
+    if is_arb(v) { return []Decl{d("--tw-font-weight", arbitrary(v)), d("font-weight", arbitrary(v))} }
+  case "leading":
+    val := ""
+    if v == "none" { val = "1" } else if has_theme("leading-" + v) { val = tv("leading-" + v) } else if is_arb(v) { val = arbitrary(v) } else { val = spacing(v, false) }
+    if val == "" { return nil }
+    return []Decl{d("--tw-leading", val), d("line-height", val)}
+  case "tracking":
+    val := ""
+    if has_theme("tracking-" + v) { val = tv("tracking-" + v) } else if is_arb(v) { val = arbitrary(v) }
+    if val == "" { return nil }
+    return []Decl{d("--tw-tracking", val), d("letter-spacing", val)}
+  case "whitespace":
+    return one("white-space", v)
+  case "align":
+    return one("vertical-align", v)
+  case "bg":
+    if is_arb(v) {
+      a := arbitrary(v)
+      if strings.has_prefix(a, "length:") { return one("background-size", a[7:]) }
+      if strings.has_prefix(a, "url(") || strings.contains(a, "gradient(") { return one("background-image", a) }
+    }
+    return color_decls("background-color", v)
+  case "border", "border-x", "border-y", "border-t", "border-r", "border-b", "border-l":
+    w := border_width(v)
+    side := ""
+    switch fam {
+    case "border-x": side = "inline"
+    case "border-y": side = "block"
+    case "border-t": side = "top"
+    case "border-r": side = "right"
+    case "border-b": side = "bottom"
+    case "border-l": side = "left"
+    }
+    if w != "" && !(is_arb(v) && strings.has_prefix(arbitrary(v), "#")) {
+      if side == "" { return []Decl{d("border-style", "var(--tw-border-style)"), d("border-width", w)} }
+      return []Decl{d("border-" + side + "-style", "var(--tw-border-style)"), d("border-" + side + "-width", w)}
+    }
+    if side == "" { return color_decls("border-color", v) }
+    return color_decls("border-" + side + "-color", v)
+  case "rounded":
+    r := radius_value(v)
+    if r == "" { return nil }
+    return one("border-radius", r)
+  case "rounded-t", "rounded-r", "rounded-b", "rounded-l":
+    r := radius_value(v)
+    if r == "" { return nil }
+    switch fam {
+    case "rounded-t": return []Decl{d("border-top-left-radius", r), d("border-top-right-radius", r)}
+    case "rounded-r": return []Decl{d("border-top-right-radius", r), d("border-bottom-right-radius", r)}
+    case "rounded-b": return []Decl{d("border-bottom-right-radius", r), d("border-bottom-left-radius", r)}
+    case "rounded-l": return []Decl{d("border-top-left-radius", r), d("border-bottom-left-radius", r)}
+    }
+  case "ring":
+    if is_number(v) { return ring_width(v + "px") }
+    if is_arb(v) && strings.has_suffix(v, "px]") { return ring_width(arbitrary(v)) }
+    return color_decls("--tw-ring-color", v)
+  case "shadow":
+    if is_arb(v) { return []Decl{d("--tw-shadow", shadow_value(arbitrary(v))), d("box-shadow", SHADOW)} }
+    return color_decls("--tw-shadow-color", v)
+  case "outline":
+    if is_number(v) { return []Decl{d("outline-style", "var(--tw-outline-style)"), d("outline-width", v + "px")} }
+    return color_decls("outline-color", v)
+  case "outline-offset":
+    if is_number(v) { return one("outline-offset", v + "px") }
+  case "opacity":
+    if is_number(v) { return one("opacity", v + "%") }
+    if is_arb(v) { return one("opacity", arbitrary(v)) }
+  case "duration":
+    if is_number(v) { return []Decl{d("--tw-duration", v + "ms"), d("transition-duration", v + "ms")} }
+  case "delay":
+    if is_number(v) { return one("transition-delay", v + "ms") }
+  case "ease":
+    if v == "linear" { return []Decl{d("--tw-ease", "linear"), d("transition-timing-function", "linear")} }
+    if has_theme("ease-" + v) { return []Decl{d("--tw-ease", tv("ease-" + v)), d("transition-timing-function", tv("ease-" + v))} }
+  case "animate":
+    if has_theme("animate-" + v) {
+      animations[v] = true
+      return one("animation", tv("animate-" + v))
+    }
+  case "fade-in", "fade-out":
+    key := "--tw-enter-opacity"
+    if fam == "fade-out" { key = "--tw-exit-opacity" }
+    if is_number(v) { return []Decl{d(key, "calc(" + v + "/100)"), d(key, pct_number(v))} }
+  case "zoom-in", "zoom-out":
+    key := "--tw-enter-scale"
+    if fam == "zoom-out" { key = "--tw-exit-scale" }
+    if is_number(v) { return []Decl{d(key, "calc(" + v + "*1%)"), d(key, pct_number(v))} }
+  case "slide-in-from-top", "slide-in-from-bottom", "slide-in-from-left", "slide-in-from-right", "slide-out-to-top", "slide-out-to-bottom", "slide-out-to-left", "slide-out-to-right":
+    enter := strings.has_prefix(fam, "slide-in")
+    dir := fam[strings.last_index(fam, "-") + 1:]
+    axis := "y"
+    if dir == "left" || dir == "right" { axis = "x" }
+    key := "--tw-exit-translate-" + axis
+    if enter { key = "--tw-enter-translate-" + axis }
+    sign := ""
+    if dir == "top" || dir == "left" { sign = "*-1" }
+    if is_number(v) {
+      out := []Decl{d(key, "calc(" + v + "*var(--spacing)" + sign + ")")}
+      if on_pct_scale(v) {
+        m := "100%"
+        if sign != "" { m = "-100%" }
+        out = append(out, d(key, "calc(" + pct_number(v) + "*" + m + ")"))
+      }
+      return out
+    }
+  case "translate-x", "translate-y":
+    s := ""
+    if v == "px" {
+      s = "1px"
+      if neg { s = "-1px" }
+    } else {
+      s = spacing(v, neg)
+    }
+    if s == "" { return nil }
+    ax := fam[len(fam) - 1:]
+    return []Decl{d("--tw-translate-" + ax, s), d("translate", "var(--tw-translate-x) var(--tw-translate-y)")}
+  case "backdrop-blur":
+    val := ""
+    if has_theme("blur-" + v) { val = "blur(" + tv("blur-" + v) + ")" } else if is_arb(v) { val = "blur(" + arbitrary(v) + ")" }
+    if val == "" { return nil }
+    return []Decl{d("--tw-backdrop-blur", val), d("-webkit-backdrop-filter", BACKDROP), d("backdrop-filter", BACKDROP)}
+  case "cursor":
+    return one("cursor", v)
+  case "fill":
+    return color_decls("fill", v)
+  case "stroke":
+    return color_decls("stroke", v)
+  case "caret":
+    return color_decls("caret-color", v)
+  case "accent":
+    return color_decls("accent-color", v)
+  case "decoration":
+    return color_decls("text-decoration-color", v)
+  case "underline-offset":
+    if is_number(v) { return one("text-underline-offset", v + "px") }
+  case "origin":
+    if is_var(v) { return one("transform-origin", var_of(v)) }
+    return one("transform-origin", strings.replace_all(v, "-", " "))
+  case "scroll-mt", "scroll-mb", "scroll-pt":
+    p := map[str]str{"scroll-mt": "scroll-margin-top", "scroll-mb": "scroll-margin-bottom", "scroll-pt": "scroll-padding-top"}[fam]
+    return one(p, spacing(v, neg))
+  case "flex":
+    if is_arb(v) { return one("flex", arbitrary(v)) }
+    if is_number(v) { return one("flex", v) }
+  case "basis":
+    return one("flex-basis", size(v, "w"))
+  case "line-clamp":
+    if is_number(v) { return []Decl{d("overflow", "hidden"), d("display", "-webkit-box"), d("-webkit-box-orient", "vertical"), d("-webkit-line-clamp", v)} }
+  case "aspect":
+    switch v {
+    case "square": return one("aspect-ratio", "1 / 1")
+    case "video": return one("aspect-ratio", "var(--aspect-video)")
+    }
+    if is_arb(v) { return one("aspect-ratio", arbitrary(v)) }
+  case "object":
+    return one("object-fit", v)
+  case "will-change":
+    return one("will-change", v)
+  }
+  return nil
+}
+
+# a percentage as a fraction, as tw-animate-css writes it: 95 -> .95, 10 -> .1, 5 -> .05, 100 -> 1
+fn pct_number(v: str) -> str {
+  if v == "0" { return "0" }
+  if v == "100" { return "1" }
+  f := v
+  if len(f) == 1 { f = "0" + f }
+  while strings.has_suffix(f, "0") { f = f[0:len(f) - 1] }
+  return "." + f
+}
+
+# the steps of tw-animate-css's percentage scale (0, 5, 10 ... 100)
+fn on_pct_scale(v: str) -> bool {
+  if !is_number(v) || strings.contains(v, ".") { return false }
+  n := 0
+  for i := 0; i < len(v); i++ { n = n * 10 + int(v[i]) - '0' }
+  return n % 5 == 0 && n <= 100
+}
+
+# a theme var that stays a reference even when the theme value is inline (the line heights)
+fn tvar(k: str) -> str {
+  used_vars[k] = true
+  return "var(--" + k + ")"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Variants
+
+struct Target {
+  sels: []str        # selectors, & for the element
+  ctx: []str         # at-rules around the rule, outermost first
+}
+
+fn arb_selector(v: str) -> str {
+  # [&_svg] -> & svg, [&>svg] -> & > svg
+  s := arbitrary("[" + v + "]")
+  out := strings.Builder{}
+  for i := 0; i < len(s); i++ {
+    c := int(s[i])
+    if c == '>' && !(i > 0 && (int(s[i - 1]) == '(' || int(s[i - 1]) == 32)) {
+      out.write(" > ")
+      while i + 1 < len(s) && int(s[i + 1]) == 32 { i++ }
+    } else if c == '>' {
+      out.write("> ")
+      while i + 1 < len(s) && int(s[i + 1]) == 32 { i++ }
+    } else {
+      out.write_byte(c)
+    }
+  }
+  return strings.replace_all(out.string(), "& > ", "& > ")
+}
+
+# what a variant adds to the element's selector ("" if it is not a simple one): for not-, has-
+fn suffix_of(v: str) -> str {
+  if strings.has_prefix(v, "aria-[") && strings.has_suffix(v, "]") {
+    a := v[6:len(v) - 1]
+    k := strings.index(a, "=")
+    if k < 0 { return "[aria-" + a + "]" }
+    return "[aria-" + a[0:k] + "=\"" + a[k + 1:] + "\"]"
+  }
+  if strings.has_prefix(v, "aria-") { return "[aria-" + v[5:] + "=\"true\"]" }
+  if strings.has_prefix(v, "data-[") && strings.has_suffix(v, "]") {
+    a := v[6:len(v) - 1]
+    k := strings.index(a, "=")
+    if k < 0 { return "[data-" + a + "]" }
+    return "[data-" + a[0:k] + "=\"" + a[k + 1:] + "\"]"
+  }
+  if strings.has_prefix(v, "data-") {
+    if c, ok := custom_variants[v]; ok && len(c) == 1 { return strings.replace_all(c[0], "&", "") }
+    return "[data-" + v[5:] + "]"
+  }
+  switch v {
+  case "hover": return ":hover"
+  case "focus": return ":focus"
+  case "focus-visible": return ":focus-visible"
+  case "focus-within": return ":focus-within"
+  case "active": return ":active"
+  case "disabled": return ":disabled"
+  case "enabled": return ":enabled"
+  case "checked": return ":checked"
+  case "required": return ":required"
+  case "invalid": return ":invalid"
+  case "visited": return ":visited"
+  case "first": return ":first-child"
+  case "last": return ":last-child"
+  case "only": return ":only-child"
+  case "odd": return ":nth-child(odd)"
+  case "even": return ":nth-child(even)"
+  case "empty": return ":empty"
+  case "open": return ":is([open], :popover-open, :open)"
+  }
+  return ""
+}
+
+fn map_sels(t: *Target, f: fn(str) -> str) {
+  out := []str{}
+  for _, s := range t.sels { out = append(out, f(s)) }
+  t.sels = out
+}
+
+fn apply_variant(t: *Target, v: str) -> bool {
+  if bp, ok := theme_vars["breakpoint-" + v]; ok {
+    t.ctx = append(t.ctx, "@media (width >= " + bp + ")")
+    return true
+  }
+  if strings.has_prefix(v, "max-") {
+    if bp, ok := theme_vars["breakpoint-" + v[4:]]; ok {
+      t.ctx = append(t.ctx, "@media (width < " + bp + ")")
+      return true
+    }
+  }
+  if c, ok := custom_variants[v]; ok {
+    out := []str{}
+    for _, s := range t.sels {
+      for _, x := range c { out = append(out, strings.replace_all(x, "&", s)) }
+    }
+    t.sels = out
+    return true
+  }
+  switch v {
+  case "hover":
+    t.ctx = append(t.ctx, "@media (hover: hover)")
+    map_sels(t, fn(s: str) -> str { return s + ":hover" })
+    return true
+  case "*":
+    map_sels(t, fn(s: str) -> str { return ":is(" + s + " > *)" })
+    return true
+  case "**":
+    map_sels(t, fn(s: str) -> str { return ":is(" + s + " *)" })
+    return true
+  case "marker":
+    out := []str{}
+    for _, s := range t.sels { out = append(out, s + " ::marker", s + "::marker", s + " ::-webkit-details-marker", s + "::-webkit-details-marker") }
+    t.sels = out
+    return true
+  case "selection":
+    out := []str{}
+    for _, s := range t.sels { out = append(out, s + " ::selection", s + "::selection") }
+    t.sels = out
+    return true
+  case "placeholder":
+    map_sels(t, fn(s: str) -> str { return s + "::placeholder" })
+    return true
+  case "before", "after":
+    map_sels(t, fn(s: str) -> str { return s + "::" + v })
+    return true
+  case "motion-safe":
+    t.ctx = append(t.ctx, "@media (prefers-reduced-motion: no-preference)")
+    return true
+  case "motion-reduce":
+    t.ctx = append(t.ctx, "@media (prefers-reduced-motion: reduce)")
+    return true
+  case "print":
+    t.ctx = append(t.ctx, "@media print")
+    return true
+  }
+  if strings.has_prefix(v, "supports-") {
+    a := v[9:]
+    if is_arb(a) { a = arbitrary(a) }
+    if !strings.contains(a, ":") { a = a + ": var(--tw)" }
+    t.ctx = append(t.ctx, "@supports (" + a + ")")
+    return true
+  }
+  if is_arb(v) {
+    a := v[1:len(v) - 1]
+    if strings.contains(a, "&") {
+      sel := arb_selector(a)
+      map_sels(t, fn(s: str) -> str { return strings.replace_all(sel, "&", s) })
+      return true
+    }
+    if strings.has_prefix(a, "@") {
+      t.ctx = append(t.ctx, arbitrary(v))
+      return true
+    }
+    x := arbitrary(v)
+    map_sels(t, fn(s: str) -> str { return s + ":is(" + x + ")" })
+    return true
+  }
+  if strings.has_prefix(v, "not-") {
+    x := suffix_of(v[4:])
+    if x == "" { return false }
+    map_sels(t, fn(s: str) -> str { return s + ":not(" + x + ")" })
+    return true
+  }
+  if strings.has_prefix(v, "has-") {
+    x := ""
+    if is_arb(v[4:]) { x = " " + arb_selector(v[5:len(v) - 1]) } else { x = suffix_of(v[4:]) }
+    if x == "" { return false }
+    if strings.has_prefix(x, " ") {
+      x2 := x
+      if !strings.has_prefix(strings.trim_space(x2), ">") { x2 = strings.trim_space(x2) }
+      map_sels(t, fn(s: str) -> str { return s + ":has(" + x2 + ")" })
+      return true
+    }
+    map_sels(t, fn(s: str) -> str { return s + ":has(" + x + ")" })
+    return true
+  }
+  if strings.has_prefix(v, "in-") {
+    x := suffix_of(v[3:])
+    if x == "" { return false }
+    map_sels(t, fn(s: str) -> str { return ":where(" + x + ") " + s })
+    return true
+  }
+  if strings.has_prefix(v, "group-") || strings.has_prefix(v, "peer-") {
+    kind := "group"
+    rest := v[6:]
+    if strings.has_prefix(v, "peer-") {
+      kind = "peer"
+      rest = v[5:]
+    }
+    name := ""
+    k := strings.last_index(rest, "/")
+    if k > 0 && strings.last_index(rest, "]") < k {
+      name = "\\/" + rest[k + 1:]
+      rest = rest[0:k]
+    }
+    x := suffix_of(rest)
+    if x == "" { return false }
+    if kind == "group" {
+      map_sels(t, fn(s: str) -> str { return s + ":is(:where(." + kind + name + ")" + x + " *)" })
+    } else {
+      map_sels(t, fn(s: str) -> str { return s + ":is(:where(." + kind + name + ")" + x + " ~ *)" })
+    }
+    return true
+  }
+  x := suffix_of(v)
+  if x == "" { return false }
+  map_sels(t, fn(s: str) -> str { return s + x })
+  return true
+}
+
+# the order of the variants in the cascade (Tailwind's): base rules first, media queries late
+fn variant_rank(v: str) -> int {
+  order := []str{"group-", "peer-", "marker", "selection", "placeholder", "before", "after", "first", "last", "only", "odd", "even", "focus-within", "hover", "focus", "focus-visible", "active", "enabled", "disabled", "in-", "has-", "aria-", "data-", "supports-", "motion-", "sm", "md", "lg", "xl", "2xl", "max-", "dark"}
+  for i, o := range order {
+    if v == o || (strings.has_suffix(o, "-") && strings.has_prefix(v, o)) {
+      # the custom data- variants (data-open...) go after the built-in ones, as Tailwind orders them
+      if o == "data-" && !strings.has_prefix(v, "data-[") {
+        if _, custom := custom_variants[v]; custom { return 100 + index_of(custom_order, v) }
+      }
+      return i + 1
+    }
+  }
+  if _, custom := custom_variants[v]; custom { return 100 + index_of(custom_order, v) }
+  if strings.has_prefix(v, "[") { return 200 }
+  if v == "*" || v == "**" { return 300 }
+  return 150
+}
+
+fn index_of(list: []str, x: str) -> int {
+  for i, y := range list {
+    if y == x { return i }
+  }
+  return 0
+}
+
+# split "a:b:[c:d]:e" at the colons outside brackets and parentheses
+fn split_variants(tok: str) -> []str {
+  out := []str{}
+  depth := 0
+  start := 0
+  for i := 0; i < len(tok); i++ {
+    c := int(tok[i])
+    if c == '[' || c == '(' { depth++ }
+    if c == ']' || c == ')' { depth-- }
+    if c == ':' && depth == 0 {
+      out = append(out, tok[start:i])
+      start = i + 1
+    }
+  }
+  return append(out, tok[start:])
+}
+
+# ---------------------------------------------------------------------------------------------
+# Compiling
+
+struct Group {
+  key: str
+  ctx: []str
+  sels: []str
+  rank: int
+  seq: int
+  decls: []Decl
+}
+
+# the property order of the output (so shorthands come before their longhands, as in Tailwind)
+const PROPS = "container-type container-name pointer-events visibility position width height padding margin overflow clip-path white-space border-width inset inset-inline inset-block top right bottom left z-index order grid-column grid-row float clear margin-inline margin-block margin-top margin-right margin-bottom margin-left box-sizing display aspect-ratio max-height min-height max-width min-width flex flex-shrink flex-grow flex-basis table-layout caption-side border-collapse transform-origin --tw-translate-x --tw-translate-y translate scale rotate transform animation cursor touch-action resize scroll-margin-top scroll-margin-bottom scroll-padding-top list-style-type appearance grid-auto-columns grid-auto-flow grid-auto-rows grid-template-columns grid-template-rows flex-direction flex-wrap place-items align-items justify-content gap column-gap row-gap align-self overflow-x overflow-y text-overflow border-radius border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius --tw-border-style border-style border-inline-style border-inline-width border-block-style border-block-width border-top-style border-top-width border-right-style border-right-width border-bottom-style border-bottom-width border-left-style border-left-width border-color border-top-color border-bottom-color border-left-color border-right-color background-color background-image mask-image background-size -webkit-background-clip background-clip fill stroke object-fit padding-inline padding-block padding-top padding-right padding-bottom padding-left text-align vertical-align font-family font-size line-height --tw-leading --tw-font-weight font-weight --tw-tracking letter-spacing text-wrap overflow-wrap word-break color text-transform font-style text-decoration-line text-decoration-color text-underline-offset caret-color accent-color opacity --tw-shadow --tw-shadow-color box-shadow --tw-ring-shadow --tw-ring-color outline outline-offset --tw-outline-style outline-style outline-width outline-color --tw-backdrop-blur -webkit-backdrop-filter backdrop-filter transition-property transition-timing-function transition-duration transition-delay --tw-duration --tw-ease will-change -webkit-user-select user-select --tw-enter-opacity --tw-enter-scale --tw-enter-translate-x --tw-enter-translate-y --tw-exit-opacity --tw-exit-scale --tw-exit-translate-x --tw-exit-translate-y"
+
+let prop_rank_cache = map[str]int{}
+
+fn prop_rank(p: str) -> int {
+  if len(prop_rank_cache) == 0 {
+    for i, x := range strings.split(PROPS, " ") { prop_rank_cache[x] = i + 1 }
+  }
+  r, ok := prop_rank_cache[p]
+  if ok { return r }
+  # custom properties of the user ([--card-spacing:...]) and unknown ones: after the known ones
+  return 10000
+}
+
+let seq_counter: int = 0
+
+# the groups (rules) of one def: utilities with the same variants merge, the last one winning
+fn compile_def(utilities: str, warn: []str) -> ([]*Group, []str) {
+  defaults()
+  groups := []*Group{}
+  index := map[str]*Group{}
+  for _, tok := range winners(strings.fields(utilities)) {
+    important := false
+    if strings.has_suffix(tok, "!") {
+      important = true
+      tok = tok[0:len(tok) - 1]
+    } else if strings.has_prefix(tok, "!") {
+      important = true
+      tok = tok[1:]
+    }
+    parts := split_variants(tok)
+    base_u := parts[len(parts) - 1]
+    decls := utility(base_u)
+    if decls == nil {
+      warn = append(warn, tok)
+      continue
+    }
+    t := &Target{sels: []str{"&"}, ctx: []str{}}
+    rank := 0
+    ok := true
+    for k := 0; k < len(parts) - 1; k++ {
+      if !apply_variant(t, parts[k]) {
+        ok = false
+        break
+      }
+      r := variant_rank(parts[k])
+      # the rank of a chain: its first variant, the following ones as tiebreakers
+      if k == 0 { rank = r * 1000 } else { rank = rank + r }
+    }
+    if !ok {
+      warn = append(warn, tok)
+      continue
+    }
+    urank := prop_rank(decls[0].prop)
+    # declarations with their own condition (color-mix of /opacity, forced-colors) are rules of
+    # their own around the same selectors
+    for di, dc := range decls {
+      ctx := t.ctx
+      if dc.supports != "" {
+        cond := dc.supports
+        if !strings.has_prefix(cond, "@") { cond = "@supports " + cond }
+        ctx = append(append([]str{}, t.ctx...), cond)
+      }
+      key := strings.join(ctx, "|") + "#" + strings.join(t.sels, ",")
+      g, exists := index[key]
+      if !exists {
+        seq_counter++
+        g = &Group{key: key, ctx: ctx, sels: t.sels, rank: rank, seq: seq_counter}
+        if dc.supports != "" { g.rank = rank }
+        index[key] = g
+        groups = append(groups, g)
+      }
+      # the last value of a property wins (shorthands and longhands are separate properties)
+      dd := dc
+      dd.important = important
+      dd.supports = ""
+      dd.rank = urank
+      dd.idx = di
+      replaced := false
+      for j := 0; j < len(g.decls); j++ {
+        if g.decls[j].prop == dd.prop && !strings.has_prefix(dd.prop, "--tw-enter") && !strings.has_prefix(dd.prop, "--tw-exit") {
+          g.decls[j] = dd
+          replaced = true
+        }
+      }
+      if !replaced { g.decls = append(g.decls, dd) }
+    }
+  }
+  # declarations in the output's property order
+  for _, g := range groups {
+    for i := 1; i < len(g.decls); i++ {
+      x := g.decls[i]
+      j := i - 1
+      while j >= 0 && (g.decls[j].rank > x.rank || (g.decls[j].rank == x.rank && g.decls[j].idx > x.idx)) {
+        g.decls[j + 1] = g.decls[j]
+        j--
+      }
+      g.decls[j + 1] = x
+    }
+  }
+  return groups, warn
+}
+
+# the utilities of a def with each @name replaced by the utilities of that def (recursively)
+fn expand(utilities: str, depth: int) -> str {
+  if !strings.contains(utilities, "@") || depth > 20 { return utilities }
+  out := []str{}
+  for _, t := range strings.fields(utilities) {
+    if strings.has_prefix(t, "@") && !strings.has_prefix(t, "@container") {
+      found := false
+      for _, d2 := range reg_defs {
+        if d2.name == t[1:] && d2.layer == "utilities" {
+          out = append(out, expand(d2.utilities, depth + 1))
+          found = true
+          break
+        }
+      }
+      if !found { out = append(out, t) }
+    } else {
+      out = append(out, t)
+    }
+  }
+  return strings.join(out, " ")
+}
+
+# the utilities left after the conflicts are resolved: a utility removes the earlier ones with
+# the same variants and the same main property (text-sm then text-[15px]: text-sm goes, with the
+# line-height it sets), as tailwind-merge does with class strings
+fn winners(tokens: []str) -> []str {
+  keys := []str{}
+  for _, tok := range tokens {
+    t := strings.trim_suffix(strings.trim_prefix(tok, "!"), "!")
+    parts := split_variants(t)
+    decls := utility(parts[len(parts) - 1])
+    main := ""
+    if decls != nil {
+      for _, dc := range decls {
+        if !strings.has_prefix(dc.prop, "--tw-") {
+          main = dc.prop
+          break
+        }
+      }
+      if main == "" { main = decls[0].prop }
+    }
+    keys = append(keys, strings.join(parts[0:len(parts) - 1], ":") + "|" + main)
+  }
+  out := []str{}
+  for i, tok := range tokens {
+    later := false
+    for j := i + 1; j < len(tokens); j++ {
+      if keys[j] == keys[i] && !strings.has_suffix(keys[i], "|") { later = true }
+    }
+    if !later { out = append(out, tok) }
+  }
+  return out
+}
+
+# a class name as a CSS selector (escaped like CSS.escape)
+export fn escape(name: str) -> str {
+  b := strings.Builder{}
+  for i := 0; i < len(name); i++ {
+    c := int(name[i])
+    word := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c >= 128
+    if i == 0 && c >= '0' && c <= '9' {
+      b.write("\\3" + strings.from_byte(c) + " ")
+    } else if word {
+      b.write_byte(c)
+    } else {
+      b.write_byte('\\')
+      b.write_byte(c)
+    }
+  }
+  return b.string()
+}
+
+struct Out {
+  b: *strings.Builder
+  indent: int
+}
+
+fn (o: *Out) line(s: str) {
+  for i := 0; i < o.indent; i++ { o.b.write("  ") }
+  o.b.write(s)
+  o.b.write("\n")
+}
+
+fn (o: *Out) rule(sel: str, ctx: []str, decls: []Decl) {
+  for _, c := range ctx {
+    o.line(c + " {")
+    o.indent++
+  }
+  o.line(sel + " {")
+  o.indent++
+  for _, dc := range decls {
+    imp := ""
+    if dc.important { imp = " !important" }
+    o.line(dc.prop + ": " + dc.value + imp + ";")
+  }
+  o.indent--
+  o.line("}")
+  for i := 0; i < len(ctx); i++ {
+    o.indent--
+    o.line("}")
+  }
+}
+
+struct Placed {
+  sel: str
+  g: *Group
+}
+
+# the utilities that are not known (or not usable) in the defs, for a warning
+export fn unknown(reg: map[str]any) -> []str {
+  warn := []str{}
+  load(reg)
+  for _, df := range reg_defs {
+    _, w := compile_def(expand(df.utilities, 0), []str{})
+    for _, x := range w { warn = append(warn, df.name + ": " + x) }
+  }
+  return warn
+}
+
+# the whole stylesheet: layers, theme variables, the reset, base rules, the defs' classes, the
+# raw CSS, and the registered custom properties and keyframes the utilities use
+export fn compile(reg: map[str]any) -> str {
+  load(reg)
+  used_vars = map[str]bool{}
+  animations = map[str]bool{}
+  base_rules := []Placed{}
+  util_rules := []Placed{}
+  for _, df := range reg_defs {
+    groups, _ := compile_def(expand(df.utilities, 0), []str{})
+    for _, g := range groups {
+      parts := []str{}
+      for _, s := range g.sels {
+        if df.layer == "base" { parts = append(parts, strings.replace_all(s, "&", df.selector)) } else { parts = append(parts, strings.replace_all(s, "&", "." + escape(df.name))) }
+      }
+      p := Placed{sel: strings.join(parts, ", "), g: g}
+      if df.layer == "base" { base_rules = append(base_rules, p) } else { util_rules = append(util_rules, p) }
+    }
+  }
+  # the cascade: by variant rank (stable: the defs' order within a rank)
+  for i := 1; i < len(util_rules); i++ {
+    x := util_rules[i]
+    j := i - 1
+    while j >= 0 && util_rules[j].g.rank > x.g.rank {
+      util_rules[j + 1] = util_rules[j]
+      j--
+    }
+    util_rules[j + 1] = x
+  }
+  # the variables the declarations refer to (and those the theme's own values refer to)
+  scan := fn(s: str) {
+    k := strings.index(s, "var(--")
+    while k >= 0 {
+      e := k + 6
+      while e < len(s) && (int(s[e]) == '-' || int(s[e]) == '_' || (int(s[e]) >= 'a' && int(s[e]) <= 'z') || (int(s[e]) >= 'A' && int(s[e]) <= 'Z') || is_digit(int(s[e]))) { e++ }
+      name := s[k + 6:e]
+      if has_theme(name) && !theme_inline[name] { used_vars[name] = true }
+      k = strings.index_from(s, "var(--", e)
+    }
+  }
+  for _, p := range util_rules {
+    for _, dc := range p.g.decls { scan(dc.value) }
+  }
+  for _, p := range base_rules {
+    for _, dc := range p.g.decls { scan(dc.value) }
+  }
+  for _, r := range reg_raws { scan(r) }
+  scan(PREFLIGHT)
+  for i := 0; i < 3; i++ {
+    for k, _ := range used_vars { scan(theme_vars[k]) }
+  }
+
+  o := &Out{b: &strings.Builder{}}
+  o.line("/*! caju style | MIT License */")
+  o.line("@layer properties;")
+  o.line("@layer theme, base, components, utilities;")
+  o.line("@layer theme {")
+  o.indent++
+  o.line(":root, :host {")
+  o.indent++
+  for _, k := range theme_order() {
+    if used_vars[k] { o.line("--" + k + ": " + theme_vars[k] + ";") }
+  }
+  o.indent--
+  o.line("}")
+  o.indent--
+  o.line("}")
+  o.line("@layer base {")
+  o.b.write(PREFLIGHT)
+  o.line("}")
+  o.line("@layer utilities {")
+  o.indent++
+  for _, p := range util_rules { o.rule(p.sel, p.g.ctx, p.g.decls) }
+  o.indent--
+  o.line("}")
+  for _, r := range reg_raws {
+    o.b.write(r)
+    o.b.write("\n")
+  }
+  if len(base_rules) > 0 {
+    o.line("@layer base {")
+    o.indent++
+    for _, p := range base_rules { o.rule(p.sel, p.g.ctx, p.g.decls) }
+    o.indent--
+    o.line("}")
+  }
+  o.b.write(PROPERTIES)
+  for _, a := range []str{"spin", "ping", "pulse", "enter", "exit"} {
+    if animations[a] { o.b.write(keyframes(a)) }
+  }
+  return o.b.string()
+}
+
+# the theme variables in a stable order: fonts, colors, spacing, sizes, the rest
+fn theme_order() -> []str {
+  keys := []str{}
+  for k, _ := range theme_vars { keys = append(keys, k) }
+  rank := fn(k: str) -> int {
+    pre := []str{"font-sans", "font-mono", "color-", "spacing", "container-", "text-", "font-weight-", "tracking-", "leading-", "radius-", "ease-", "animate-", "blur-", "default-", "font-"}
+    for i, p := range pre {
+      if k == p || strings.has_prefix(k, p) { return i }
+    }
+    return 100
+  }
+  for i := 1; i < len(keys); i++ {
+    x := keys[i]
+    j := i - 1
+    while j >= 0 && rank(keys[j]) > rank(x) {
+      keys[j + 1] = keys[j]
+      j--
+    }
+    keys[j + 1] = x
+  }
+  return keys
+}
+
+# ---------------------------------------------------------------------------------------------
+# The reset, the registered custom properties and the keyframes (the same as Tailwind CSS 4's:
+# its preflight and properties, MIT License, Copyright (c) Tailwind Labs, Inc.)
+
+const PREFLIGHT = "  *, ::after, ::before, ::backdrop, ::file-selector-button {\n    box-sizing: border-box;\n    margin: 0;\n    padding: 0;\n    border: 0 solid;\n  }\n  html, :host {\n    line-height: 1.5;\n    -webkit-text-size-adjust: 100%;\n    tab-size: 4;\n    font-family: var(--default-font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", \"Noto Sans\", Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\");\n    font-feature-settings: var(--default-font-feature-settings, normal);\n    font-variation-settings: var(--default-font-variation-settings, normal);\n    -webkit-tap-highlight-color: transparent;\n  }\n  hr {\n    height: 0;\n    color: inherit;\n    border-top-width: 1px;\n  }\n  abbr:where([title]) {\n    -webkit-text-decoration: underline dotted;\n    text-decoration: underline dotted;\n  }\n  h1, h2, h3, h4, h5, h6 {\n    font-size: inherit;\n    font-weight: inherit;\n  }\n  a {\n    color: inherit;\n    -webkit-text-decoration: inherit;\n    text-decoration: inherit;\n  }\n  b, strong {\n    font-weight: bolder;\n  }\n  code, kbd, samp, pre {\n    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace);\n    font-feature-settings: var(--default-mono-font-feature-settings, normal);\n    font-variation-settings: var(--default-mono-font-variation-settings, normal);\n    font-size: 1em;\n  }\n  small {\n    font-size: 80%;\n  }\n  sub, sup {\n    font-size: 75%;\n    line-height: 0;\n    position: relative;\n    vertical-align: baseline;\n  }\n  sub {\n    bottom: -0.25em;\n  }\n  sup {\n    top: -0.5em;\n  }\n  table {\n    text-indent: 0;\n    border-color: inherit;\n    border-collapse: collapse;\n  }\n  :-moz-focusring:where(:not(iframe)) {\n    outline: auto;\n  }\n  progress {\n    vertical-align: baseline;\n  }\n  summary {\n    display: list-item;\n  }\n  ol, ul, menu {\n    list-style: none;\n  }\n  img, svg, video, canvas, audio, iframe, embed, object {\n    display: block;\n    vertical-align: middle;\n  }\n  img, video {\n    max-width: 100%;\n    height: auto;\n  }\n  button, input, select, optgroup, textarea, ::file-selector-button {\n    font: inherit;\n    font-feature-settings: inherit;\n    font-variation-settings: inherit;\n    letter-spacing: inherit;\n    color: inherit;\n    border-radius: 0;\n    background-color: transparent;\n    opacity: 1;\n  }\n  :where(select:is([multiple], [size])) optgroup {\n    font-weight: bolder;\n  }\n  :where(select:is([multiple], [size])) optgroup option {\n    padding-inline-start: 20px;\n  }\n  ::file-selector-button {\n    margin-inline-end: 4px;\n  }\n  ::placeholder {\n    opacity: 1;\n  }\n  @supports (not (-webkit-appearance: -apple-pay-button))  or (contain-intrinsic-size: 1px) {\n    ::placeholder {\n      color: currentcolor;\n      @supports (color: color-mix(in lab, red, red)) {\n        color: color-mix(in oklab, currentcolor 50%, transparent);\n      }\n    }\n  }\n  textarea {\n    resize: vertical;\n  }\n  ::-webkit-search-decoration {\n    -webkit-appearance: none;\n  }\n  ::-webkit-date-and-time-value {\n    min-height: 1lh;\n    text-align: inherit;\n  }\n  ::-webkit-datetime-edit {\n    display: inline-flex;\n  }\n  ::-webkit-datetime-edit-fields-wrapper {\n    padding: 0;\n  }\n  ::-webkit-datetime-edit, ::-webkit-datetime-edit-year-field, ::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field, ::-webkit-datetime-edit-hour-field, ::-webkit-datetime-edit-minute-field, ::-webkit-datetime-edit-second-field, ::-webkit-datetime-edit-millisecond-field, ::-webkit-datetime-edit-meridiem-field {\n    padding-block: 0;\n  }\n  ::-webkit-calendar-picker-indicator {\n    line-height: 1;\n  }\n  :-moz-ui-invalid {\n    box-shadow: none;\n  }\n  button, input:where([type=\"button\"], [type=\"reset\"], [type=\"submit\"]), ::file-selector-button {\n    appearance: button;\n  }\n  ::-webkit-inner-spin-button, ::-webkit-outer-spin-button {\n    height: auto;\n  }\n  [hidden]:where(:not([hidden=\"until-found\"])) {\n    display: none !important;\n  }\n"
+
+const PROPERTIES = "@property --tw-animation-delay {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0s;\n}\n@property --tw-animation-direction {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: normal;\n}\n@property --tw-animation-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-animation-fill-mode {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: none;\n}\n@property --tw-animation-iteration-count {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --scroll-fade-t {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-b {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-s {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-e {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-mask {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-angle {\n  syntax: \"<angle>\";\n  inherits: true;\n  initial-value: 20deg;\n}\n@property --shimmer-image {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-text-fill {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-z {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-rotate-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-z {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-border-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-leading {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-font-weight {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-tracking {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-inset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-ring-inset {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-offset-width {\n  syntax: \"<length>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --tw-ring-offset-color {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: #fff;\n}\n@property --tw-ring-offset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-outline-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-backdrop-blur {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-brightness {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-contrast {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-grayscale {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-hue-rotate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-invert {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-opacity {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-saturate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-sepia {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ease {\n  syntax: \"*\";\n  inherits: false;\n}\n@layer properties {\n  @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {\n    :root, :host {\n      --shimmer-angle: 20deg;\n    }\n    *, ::before, ::after, ::backdrop {\n      --tw-translate-x: 0;\n      --tw-translate-y: 0;\n      --tw-translate-z: 0;\n      --tw-rotate-x: initial;\n      --tw-rotate-y: initial;\n      --tw-rotate-z: initial;\n      --tw-skew-x: initial;\n      --tw-skew-y: initial;\n      --tw-border-style: solid;\n      --tw-leading: initial;\n      --tw-font-weight: initial;\n      --tw-tracking: initial;\n      --tw-shadow: 0 0 #0000;\n      --tw-shadow-color: initial;\n      --tw-shadow-alpha: 100%;\n      --tw-inset-shadow: 0 0 #0000;\n      --tw-inset-shadow-color: initial;\n      --tw-inset-shadow-alpha: 100%;\n      --tw-ring-color: initial;\n      --tw-ring-shadow: 0 0 #0000;\n      --tw-inset-ring-color: initial;\n      --tw-inset-ring-shadow: 0 0 #0000;\n      --tw-ring-inset: initial;\n      --tw-ring-offset-width: 0px;\n      --tw-ring-offset-color: #fff;\n      --tw-ring-offset-shadow: 0 0 #0000;\n      --tw-outline-style: solid;\n      --tw-backdrop-blur: initial;\n      --tw-backdrop-brightness: initial;\n      --tw-backdrop-contrast: initial;\n      --tw-backdrop-grayscale: initial;\n      --tw-backdrop-hue-rotate: initial;\n      --tw-backdrop-invert: initial;\n      --tw-backdrop-opacity: initial;\n      --tw-backdrop-saturate: initial;\n      --tw-backdrop-sepia: initial;\n      --tw-duration: initial;\n      --tw-ease: initial;\n      --tw-animation-delay: 0s;\n      --tw-animation-direction: normal;\n      --tw-animation-duration: initial;\n      --tw-animation-fill-mode: none;\n      --tw-animation-iteration-count: 1;\n      --tw-enter-blur: 0;\n      --tw-enter-opacity: 1;\n      --tw-enter-rotate: 0;\n      --tw-enter-scale: 1;\n      --tw-enter-translate-x: 0;\n      --tw-enter-translate-y: 0;\n      --tw-exit-blur: 0;\n      --tw-exit-opacity: 1;\n      --tw-exit-rotate: 0;\n      --tw-exit-scale: 1;\n      --tw-exit-translate-x: 0;\n      --tw-exit-translate-y: 0;\n      --scroll-fade-t: 0px;\n      --scroll-fade-b: 0px;\n      --scroll-fade-s: 0px;\n      --scroll-fade-e: 0px;\n      --scroll-fade-mask: initial;\n      --shimmer-image: initial;\n      --shimmer-text-fill: initial;\n    }\n  }\n}\n"
+
+fn keyframes(name: str) -> str {
+  switch name {
+  case "spin": return "@keyframes spin {\n  to {\n    transform: rotate(360deg);\n  }\n}\n"
+  case "enter": return "@keyframes enter {\n  from {\n    opacity: var(--tw-enter-opacity,1);\n    transform: translate3d(var(--tw-enter-translate-x,0),var(--tw-enter-translate-y,0),0)scale3d(var(--tw-enter-scale,1),var(--tw-enter-scale,1),var(--tw-enter-scale,1))rotate(var(--tw-enter-rotate,0));\n    filter: blur(var(--tw-enter-blur,0));\n  }\n}\n"
+  case "exit": return "@keyframes exit {\n  to {\n    opacity: var(--tw-exit-opacity,1);\n    transform: translate3d(var(--tw-exit-translate-x,0),var(--tw-exit-translate-y,0),0)scale3d(var(--tw-exit-scale,1),var(--tw-exit-scale,1),var(--tw-exit-scale,1))rotate(var(--tw-exit-rotate,0));\n    filter: blur(var(--tw-exit-blur,0));\n  }\n}\n"
+  }
+  return ""
+}

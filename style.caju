@@ -1,0 +1,91 @@
+# caju style: utility-first CSS for Caju, compiled to semantic classes.
+#
+#   let card = style.def("card", "flex flex-col gap-3 rounded-[20px] bg-card p-7 ring-1 ring-border")
+#   <div class={card}>                 -> <div class="card">
+#   fs.write_file("site.css", css.compile(style.registry()), 420)
+#                                       (import "github.com/aecdanjundex/caju-style/css", build only)
+#
+# Styles are written with the utility vocabulary of Tailwind CSS (spacing, colors, typography,
+# flex and grid, borders, shadows, transitions, variants such as hover:, dark:, sm:, aria-*:,
+# data-*:, arbitrary values [...] and properties [prop:value]), and each def becomes ONE class
+# with a readable name: the elements carry "card" instead of a dozen utilities. Utilities that set
+# the same property in a def are merged (the last one wins), so there is nothing like
+# tailwind-merge to run. The CSS has the same shape as Tailwind's (cascade layers, theme
+# variables, the same declarations), with no Node and no Tailwind: css.compile() (the css module,
+# which only the build imports, so a program in the browser carries just this registry) writes it.
+#
+# A def can include another one with @name: def("button-primary", "@button bg-primary").
+import "std/strings"
+
+# ---------------------------------------------------------------------------------------------
+# Declarations, rules and the registry
+
+
+export struct Def {
+  name: str
+  utilities: str
+  layer: str         # "utilities" or "base"
+  selector: str      # base rules: the selector (the def's class otherwise)
+}
+
+export let defs: []*Def = []*Def{}
+let def_names = map[str]bool{}
+export let raws: []str = []str{}
+export let theme_vars = map[str]str{}
+export let theme_inline = map[str]bool{}
+export let custom_variants = map[str][]str{}
+export let custom_order: []str = []str{}
+
+# a style: the utilities, compiled to one class named name (returned, for class={...})
+export fn def(name: str, utilities: str) -> str {
+  if def_names[name] {
+    for _, d := range defs {
+      if d.name == name && d.layer == "utilities" { d.utilities = utilities }
+    }
+    return name
+  }
+  def_names[name] = true
+  defs = append(defs, &Def{name: name, utilities: utilities, layer: "utilities"})
+  return name
+}
+
+# a rule in the base layer for any selector (what @apply does in a stylesheet): "body", "html"...
+export fn base(selector: str, utilities: str) {
+  defs = append(defs, &Def{name: selector, utilities: utilities, layer: "base", selector: selector})
+}
+
+# CSS written as is, after the generated rules (@font-face, the theme's custom properties...)
+export fn raw(css: str) { raws = append(raws, css) }
+
+# a theme value, referenced as var(--name) by the utilities that use it
+export fn theme(name: str, value: str) {
+  theme_vars[name] = value
+  theme_inline[name] = false
+}
+
+# a theme value written into the utilities themselves (Tailwind's @theme inline)
+export fn theme_inline_value(name: str, value: str) {
+  theme_vars[name] = value
+  theme_inline[name] = true
+}
+
+# a variant: name: applies the utility to the selectors given, with & for the element
+# ("data-open", ":where([data-state=\"open\"])"), several separated by " || "
+export fn custom_variant(name: str, selectors: str) {
+  if _, ok := custom_variants[name]; !ok { custom_order = append(custom_order, name) }
+  custom_variants[name] = strings.split(selectors, " || ")
+}
+
+# everything registered, as plain values, for the compiler: css.compile(style.registry())
+export fn registry() -> map[str]any {
+  list := []any{}
+  for _, df := range defs { list = append(list, []any{df.layer, df.name, df.selector, df.utilities}) }
+  return map[str]any{
+    "defs": list,
+    "raws": raws,
+    "theme": theme_vars,
+    "inline": theme_inline,
+    "variants": custom_variants,
+    "order": custom_order,
+  }
+}

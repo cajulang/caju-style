@@ -1,0 +1,12 @@
+# Prints the CSS of every utility in tokens.txt, each as a class named like the utility (as
+# Tailwind does), to compare with Tailwind's output: tools/check.sh
+import style "../style"
+import css "../css"
+import "std/fs"
+import "std/strings"
+import "./site_theme"
+
+site_theme.setup()
+text, _ := fs.read_file("testdata/tokens.txt")
+for _, t := range strings.fields(text) { style.def(t, t) }
+print(css.compile(style.registry()))

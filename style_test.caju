@@ -1,0 +1,87 @@
+import { describe, it, expect } from "std/testing"
+import "std/strings"
+import "style"
+import "css"
+
+fn compiled() -> str { return css.compile(style.registry()) }
+
+# the body of the rule for selector (the first one in the output)
+fn rule(out: str, selector: str) -> str {
+  i := strings.index(out, "\n  " + selector + " {\n")
+  if i < 0 { return "" }
+  j := strings.index_from(out, "\n  }", i + 1)
+  body := out[i + len(selector) + 6:j]
+  return strings.join(strings.fields(strings.replace_all(body, ";", "; ")), " ")
+}
+
+describe("style.def", fn() {
+  it("returns the class name, for class={...}", fn() {
+    expect(style.def("card-a", "p-4")).to_equal("card-a")
+  })
+  it("compiles the utilities into one rule for the class", fn() {
+    style.def("box-a", "flex flex-col gap-3 rounded-xl p-7")
+    # in Tailwind's property order (padding before display)
+    expect(rule(compiled(), ".box-a")).to_equal("padding: calc(var(--spacing) * 7); display: flex; flex-direction: column; gap: calc(var(--spacing) * 3); border-radius: var(--radius-xl);")
+  })
+  it("merges utilities that set the same property: the last one wins", fn() {
+    style.def("box-b", "p-2 text-sm p-6 text-[15px]")
+    out := rule(compiled(), ".box-b")
+    expect(strings.contains(out, "padding: calc(var(--spacing) * 6)")).to_equal(true)
+    expect(strings.contains(out, "calc(var(--spacing) * 2)")).to_equal(false)
+    expect(strings.contains(out, "font-size: 15px")).to_equal(true)
+  })
+  it("drops a utility overridden by a later one of the same kind, whole (as tailwind-merge)", fn() {
+    style.def("size-a", "text-sm font-medium text-[15px] font-bold")
+    out := rule(compiled(), ".size-a")
+    expect(strings.contains(out, "line-height")).to_equal(false)
+    expect(strings.contains(out, "font-size: 15px")).to_equal(true)
+    expect(strings.contains(out, "--font-weight-medium")).to_equal(false)
+  })
+  it("includes another def with @name", fn() {
+    style.def("btn-a", "inline-flex rounded-lg px-3")
+    style.def("btn-a-primary", "@btn-a bg-black px-5")
+    out := rule(compiled(), ".btn-a-primary")
+    expect(strings.contains(out, "display: inline-flex")).to_equal(true)
+    expect(strings.contains(out, "padding-inline: calc(var(--spacing) * 5)")).to_equal(true)
+  })
+  it("writes variants as their own rules, media queries after the rest", fn() {
+    style.def("link-a", "text-black hover:underline sm:p-2 dark:text-white")
+    out := compiled()
+    expect(strings.contains(out, "@media (hover: hover) {\n    .link-a:hover {")).to_equal(true)
+    expect(strings.contains(out, "@media (width >= 40rem) {\n    .link-a {")).to_equal(true)
+    expect(strings.contains(out, ".link-a:is(.dark *) {")).to_equal(true)
+    expect(strings.index(out, "  .link-a {") < strings.index(out, "(width >= 40rem) {\n    .link-a")).to_equal(true)
+  })
+  it("writes /opacity with color-mix", fn() {
+    style.def("tint-a", "bg-black/10")
+    out := compiled()
+    expect(strings.contains(out, "background-color: color-mix(in srgb, #000 10%, transparent);")).to_equal(true)
+    expect(strings.contains(out, "color-mix(in oklab, var(--color-black) 10%, transparent)")).to_equal(true)
+  })
+  it("adds the theme variables the rules use", fn() {
+    style.def("text-a", "text-sm leading-relaxed")
+    out := compiled()
+    expect(strings.contains(out, "--text-sm: 0.875rem;")).to_equal(true)
+    expect(strings.contains(out, "--leading-relaxed: 1.625;")).to_equal(true)
+  })
+  it("uses the theme: inline values are written into the rules", fn() {
+    style.theme_inline_value("color-brand", "var(--brand)")
+    style.def("brand-a", "text-brand")
+    expect(rule(compiled(), ".brand-a")).to_equal("color: var(--brand);")
+  })
+  it("reports the utilities it does not know", fn() {
+    style.def("bad-a", "p-4 nonsense-utility hover:p-zz")
+    w := css.unknown(style.registry())
+    expect(strings.contains(strings.join(w, " | "), "bad-a: nonsense-utility")).to_equal(true)
+    expect(strings.contains(strings.join(w, " | "), "bad-a: hover:p-zz")).to_equal(true)
+  })
+})
+
+describe("style.base", fn() {
+  it("writes base rules for any selector", fn() {
+    style.base("body", "bg-black text-white")
+    out := compiled()
+    k := strings.last_index(out, "@layer base {")
+    expect(strings.contains(out[k:], "body {\n    background-color: var(--color-black);\n    color: var(--color-white);")).to_equal(true)
+  })
+})

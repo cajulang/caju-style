@@ -1,0 +1,37 @@
+# The theme of the cajulang site (its globals.css), for the tests against Tailwind's output.
+import style "../style"
+
+export fn setup() {
+  for _, c := range []str{"background", "foreground", "ring", "input", "border", "destructive", "accent-foreground", "accent", "muted-foreground", "muted", "secondary-foreground", "secondary", "primary-foreground", "primary", "popover-foreground", "popover", "card-foreground", "card", "surface", "inverse", "inverse-foreground", "inverse-muted", "inverse-panel", "bar-other", "brand-hover"} {
+    style.theme_inline_value("color-" + c, "var(--" + c + ")")
+  }
+  code := []str{"code #1a1410", "code-bar #120e0b", "code-line #2e251f", "code-ring #3a2f27", "code-text #ede3d7", "code-dim #8a7b6e", "code-gutter #5a4d42", "tok-kw #f0603a", "tok-fn #ffd166", "tok-type #7fc8e8", "tok-str #9bd67a", "tok-num #f2b36b", "tok-comment #8a7b6e"}
+  for _, c := range code {
+    k := 0
+    while int(c[k]) != 32 { k++ }
+    style.theme_inline_value("color-" + c[0:k], c[k + 1:])
+  }
+  for _, r := range []str{"sm 0.6", "md 0.8", "xl 1.4", "2xl 1.8", "3xl 2.2", "4xl 2.6"} {
+    k := 0
+    while int(r[k]) != 32 { k++ }
+    style.theme_inline_value("radius-" + r[0:k], "calc(var(--radius) * " + r[k + 1:] + ")")
+  }
+  style.theme_inline_value("radius-lg", "var(--radius)")
+  fonts := "\"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", \"Noto Sans SC\", \"Noto Sans CJK SC\", ui-sans-serif, system-ui, sans-serif"
+  style.theme("font-sans", "var(--font-space), " + fonts)
+  style.theme("font-heading", "var(--font-space), " + fonts)
+  style.theme("font-mono", "var(--font-jetbrains), ui-monospace, monospace")
+  style.custom_variant("dark", "&:is(.dark *)")
+  for _, v := range []str{"open state", "closed state", "checked state", "unchecked state", "disabled true", "active state"} {
+    k := 0
+    while int(v[k]) != 32 { k++ }
+    name := v[0:k]
+    how := v[k + 1:]
+    first := "&:where([data-state=\"" + name + "\"])"
+    if how == "true" { first = "&:where([data-" + name + "=\"true\"])" }
+    style.custom_variant("data-" + name, first + " || &:where([data-" + name + "]:not([data-" + name + "=\"false\"]))")
+  }
+  style.custom_variant("data-selected", "&:where([data-selected=\"true\"])")
+  style.custom_variant("data-horizontal", "&:where([data-orientation=\"horizontal\"])")
+  style.custom_variant("data-vertical", "&:where([data-orientation=\"vertical\"])")
+}
