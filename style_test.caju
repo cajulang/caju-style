@@ -69,6 +69,25 @@ describe("style.def", fn() {
     style.def("brand-a", "text-brand")
     expect(rule(compiled(), ".brand-a")).to_equal("color: var(--brand);")
   })
+  it("defines an inline value referred to by var() in an arbitrary value", fn() {
+    style.theme_inline_value("color-edge", "#3a2f27")
+    style.def("edge-a", "shadow-[0_0_0_1px_var(--color-edge)]")
+    expect(strings.contains(compiled(), "--color-edge: #3a2f27;")).to_equal(true)
+  })
+  it("keeps a border's width and style together (border border-dashed)", fn() {
+    style.def("dashed-a", "border border-dashed border-black")
+    r := rule(compiled(), ".dashed-a")
+    expect(strings.contains(r, "border-width: 1px;")).to_equal(true)
+    expect(strings.contains(r, "border-style: dashed;")).to_equal(true)
+  })
+  it("minifies the stylesheet", fn() {
+    out := css.minify("/*! keep */\n@layer a {\n  /* drop */\n  .x {\n    color: red;\n    margin: 0 auto;\n  }\n}\n@layer b;\n")
+    expect(out).to_equal("/*! keep */\n@layer a{.x{color:red;margin:0 auto}}@layer b;")
+  })
+  it("chooses one of two styles", fn() {
+    expect(style.pick(true, "tab-on", "tab")).to_equal("tab-on")
+    expect(style.pick(false, "tab-on", "tab")).to_equal("tab")
+  })
   it("reports the utilities it does not know", fn() {
     style.def("bad-a", "p-4 nonsense-utility hover:p-zz")
     w := css.unknown(style.registry())

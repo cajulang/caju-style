@@ -49,6 +49,12 @@ export fn def(name: str, utilities: str) -> str {
   return name
 }
 
+# one of two styles: class={style.pick(active, tab_active, tab)}
+export fn pick(cond: bool, yes: str, no: str) -> str {
+  if cond { return yes }
+  return no
+}
+
 # a rule in the base layer for any selector (what @apply does in a stylesheet): "body", "html"...
 export fn base(selector: str, utilities: str) {
   defs = append(defs, &Def{name: selector, utilities: utilities, layer: "base", selector: selector})

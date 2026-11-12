@@ -392,6 +392,8 @@ fn utility(u: str) -> []Decl {
   case "not-sr-only":
     return []Decl{d("position", "static"), d("width", "auto"), d("height", "auto"), d("padding", "0"), d("margin", "0"), d("overflow", "visible"), d("clip-path", "none"), d("white-space", "normal")}
   case "italic": return one("font-style", "italic")
+  case "antialiased": return []Decl{d("-webkit-font-smoothing", "antialiased"), d("-moz-osx-font-smoothing", "grayscale")}
+  case "subpixel-antialiased": return []Decl{d("-webkit-font-smoothing", "auto"), d("-moz-osx-font-smoothing", "auto")}
   case "not-italic": return one("font-style", "normal")
   case "uppercase", "lowercase", "capitalize": return one("text-transform", u)
   case "underline", "overline", "line-through": return one("text-decoration-line", u)
@@ -1160,6 +1162,13 @@ fn winners(tokens: []str) -> []str {
         }
       }
       if main == "" { main = decls[0].prop }
+      # border and outline set the style and the width: they are about the width (border-2 and
+      # border-dashed do not conflict)
+      if strings.has_suffix(main, "-style") {
+        for _, dc := range decls {
+          if strings.has_suffix(dc.prop, "-width") { main = dc.prop }
+        }
+      }
     }
     keys = append(keys, strings.join(parts[0:len(parts) - 1], ":") + "|" + main)
   }
@@ -1226,6 +1235,36 @@ fn (o: *Out) rule(sel: str, ctx: []str, decls: []Decl) {
 struct Placed {
   sel: str
   g: *Group
+  owner: int         # the def's index
+}
+
+# rules with the same body share it: ".button:focus-visible, .button-ghost:focus-visible {...}"
+# (the defs made with @name repeat a lot). A rule joins an earlier one of the same variant rank,
+# which keeps the cascade when its def has no other rule of that rank: the rules of a def stay
+# in their order, and each element has one def's class.
+fn merge_rules(rules: []Placed) -> []Placed {
+  per_rank := map[str]int{}
+  for _, p := range rules { per_rank[str(p.owner) + "|" + str(p.g.rank)] += 1 }
+  out := []Placed{}
+  at := map[str]int{}
+  for _, p := range rules {
+    b := &strings.Builder{}
+    b.write(str(p.g.rank))
+    for _, c := range p.g.ctx { b.write("\x01" + c) }
+    for _, dc := range p.g.decls {
+      b.write("\x02" + dc.prop + ":" + dc.value)
+      if dc.important { b.write("!") }
+    }
+    key := b.string()
+    solo := per_rank[str(p.owner) + "|" + str(p.g.rank)] == 1
+    if k, ok := at[key]; ok && solo && !strings.contains(p.sel, "::-") && !strings.contains(out[k].sel, "::-") {
+      out[k] = Placed{sel: out[k].sel + ", " + p.sel, g: out[k].g, owner: out[k].owner}
+      continue
+    }
+    if _, ok := at[key]; !ok { at[key] = len(out) }
+    out = append(out, p)
+  }
+  return out
 }
 
 # the utilities that are not known (or not usable) in the defs, for a warning
@@ -1247,14 +1286,14 @@ export fn compile(reg: map[str]any) -> str {
   animations = map[str]bool{}
   base_rules := []Placed{}
   util_rules := []Placed{}
-  for _, df := range reg_defs {
+  for di, df := range reg_defs {
     groups, _ := compile_def(expand(df.utilities, 0), []str{})
     for _, g := range groups {
       parts := []str{}
       for _, s := range g.sels {
         if df.layer == "base" { parts = append(parts, strings.replace_all(s, "&", df.selector)) } else { parts = append(parts, strings.replace_all(s, "&", "." + escape(df.name))) }
       }
-      p := Placed{sel: strings.join(parts, ", "), g: g}
+      p := Placed{sel: strings.join(parts, ", "), g: g, owner: di}
       if df.layer == "base" { base_rules = append(base_rules, p) } else { util_rules = append(util_rules, p) }
     }
   }
@@ -1268,6 +1307,7 @@ export fn compile(reg: map[str]any) -> str {
     }
     util_rules[j + 1] = x
   }
+  util_rules = merge_rules(util_rules)
   # the variables the declarations refer to (and those the theme's own values refer to)
   scan := fn(s: str) {
     k := strings.index(s, "var(--")
@@ -1275,7 +1315,8 @@ export fn compile(reg: map[str]any) -> str {
       e := k + 6
       while e < len(s) && (int(s[e]) == '-' || int(s[e]) == '_' || (int(s[e]) >= 'a' && int(s[e]) <= 'z') || (int(s[e]) >= 'A' && int(s[e]) <= 'Z') || is_digit(int(s[e]))) { e++ }
       name := s[k + 6:e]
-      if has_theme(name) && !theme_inline[name] { used_vars[name] = true }
+      # (inline values too: a var(--color-x) written in an arbitrary value needs the variable)
+      if has_theme(name) { used_vars[name] = true }
       k = strings.index_from(s, "var(--", e)
     }
   }
@@ -1370,4 +1411,41 @@ fn keyframes(name: str) -> str {
   case "exit": return "@keyframes exit {\n  to {\n    opacity: var(--tw-exit-opacity,1);\n    transform: translate3d(var(--tw-exit-translate-x,0),var(--tw-exit-translate-y,0),0)scale3d(var(--tw-exit-scale,1),var(--tw-exit-scale,1),var(--tw-exit-scale,1))rotate(var(--tw-exit-rotate,0));\n    filter: blur(var(--tw-exit-blur,0));\n  }\n}\n"
   }
   return ""
+}
+
+# the stylesheet without the indentation, line breaks and comments (the license comment stays):
+#   css.minify(css.compile(reg))
+export fn minify(text: str) -> str {
+  b := &strings.Builder{}
+  in_comment := false
+  semi := false
+  for _, raw := range strings.split(text, "\n") {
+    line := strings.trim_space(raw)
+    if in_comment {
+      if strings.contains(line, "*/") { in_comment = false }
+      continue
+    }
+    if strings.has_prefix(line, "/*") && !strings.has_prefix(line, "/*!") {
+      if !strings.contains(line, "*/") { in_comment = true }
+      continue
+    }
+    if line == "" { continue }
+    if strings.has_suffix(line, " {") { line = line[0:len(line) - 2] + "{" }
+    # "prop: value;" -> "prop:value;" (a declaration: a name, then ": ")
+    k := strings.index(line, ": ")
+    if k > 0 && !strings.contains(line[0:k], " ") && !strings.contains(line[0:k], "{") && !strings.has_prefix(line, "@") {
+      line = line[0:k + 1] + line[k + 2:]
+    }
+    # the last declaration of a block needs no ";": it is written with the next line
+    if semi && line != "}" { b.write(";") }
+    semi = false
+    if strings.has_suffix(line, ";") && !strings.has_prefix(line, "@") {
+      line = line[0:len(line) - 1]
+      semi = true
+    }
+    b.write(line)
+    if strings.has_prefix(line, "/*!") { b.write("\n") }
+  }
+  if semi { b.write(";") }
+  return b.string()
 }
