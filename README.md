@@ -44,11 +44,12 @@ The utilities are Tailwind CSS 4's, with the same declarations:
 - sizes and spacing: `w-*`, `h-*`, `size-*`, `min-*`, `max-*`, `p-*`, `m-*` (the spacing scale,
   fractions, `-` for negatives);
 - typography: `text-*` (sizes and colors), `font-*`, `leading-*`, `tracking-*`, `whitespace-*`,
-  `break-*`, `uppercase`, `italic`, `antialiased`...;
+  `break-*`, `uppercase`, `italic`, `antialiased`, `tabular-nums`...;
 - colors with opacity (`bg-primary/80`, as `color-mix()` with a fallback);
 - borders, rings, shadows, outlines, radii;
 - transforms, transitions, animations (`animate-spin` and the `animate-in` / `fade-in` /
   `zoom-in` / `slide-in-*` family);
+- `content-['›']` for `before:` and `after:`, `order-*`, `border-collapse`;
 - arbitrary values and properties: `w-[640px]`, `grid-cols-[3rem_minmax(0,1fr)]`,
   `[mask-image:linear-gradient(...)]`, `shadow-[inset_0_0_0_1px_var(--color-border)]`.
 

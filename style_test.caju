@@ -23,6 +23,16 @@ describe("style.def", fn() {
     # in Tailwind's property order (padding before display)
     expect(rule(compiled(), ".box-a")).to_equal("padding: calc(var(--spacing) * 7); display: flex; flex-direction: column; gap: calc(var(--spacing) * 3); border-radius: var(--radius-xl);")
   })
+  it("knows numbers, tables, order, content and the plain enter animations", fn() {
+    style.def("box-nums", "tabular-nums border-collapse order-last transition-shadow fade-in")
+    out := rule(compiled(), ".box-nums")
+    for _, want := range []str{"font-variant-numeric: tabular-nums", "border-collapse: collapse", "order: 9999", "transition-property: box-shadow", "--tw-enter-opacity: 0"} {
+      expect(strings.contains(out, want)).to_equal(true)
+    }
+    style.def("box-content", "before:content-['›']")
+    expect(strings.contains(compiled(), "--tw-content: '›'")).to_equal(true)
+    expect(len(css.unknown(style.registry()))).to_equal(0)
+  })
   it("merges utilities that set the same property: the last one wins", fn() {
     style.def("box-b", "p-2 text-sm p-6 text-[15px]")
     out := rule(compiled(), ".box-b")

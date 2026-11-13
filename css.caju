@@ -395,6 +395,14 @@ fn utility(u: str) -> []Decl {
   case "not-sr-only":
     return []Decl{d("position", "static"), d("width", "auto"), d("height", "auto"), d("padding", "0"), d("margin", "0"), d("overflow", "visible"), d("clip-path", "none"), d("white-space", "normal")}
   case "italic": return one("font-style", "italic")
+  case "tabular-nums", "proportional-nums", "lining-nums", "oldstyle-nums": return one("font-variant-numeric", u)
+  case "normal-nums": return one("font-variant-numeric", "normal")
+  case "border-collapse", "border-separate": return one("border-collapse", u[7:])
+  case "order-first": return one("order", "-9999")
+  case "order-last": return one("order", "9999")
+  case "order-none": return one("order", "0")
+  case "fade-in": return one("--tw-enter-opacity", "0")
+  case "fade-out": return one("--tw-exit-opacity", "0")
   case "antialiased": return []Decl{d("-webkit-font-smoothing", "antialiased"), d("-moz-osx-font-smoothing", "grayscale")}
   case "subpixel-antialiased": return []Decl{d("-webkit-font-smoothing", "auto"), d("-moz-osx-font-smoothing", "auto")}
   case "not-italic": return one("font-style", "normal")
@@ -442,6 +450,7 @@ fn utility(u: str) -> []Decl {
   case "transition": return transition("color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to, opacity, box-shadow, transform, translate, scale, rotate, filter, -webkit-backdrop-filter, backdrop-filter, display, content-visibility, overlay, pointer-events")
   case "transition-all": return transition("all")
   case "transition-colors": return transition(TRANSITION_COLORS)
+  case "transition-shadow": return transition("box-shadow")
   case "transition-opacity": return transition("opacity")
   case "transition-transform": return transition("transform, translate, scale, rotate")
   case "transition-none": return one("transition-property", "none")
@@ -559,6 +568,12 @@ fn utility(u: str) -> []Decl {
     return one("align-self", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "auto": "auto", "stretch": "stretch", "baseline": "baseline"}[v])
   case "place-items":
     return one("place-items", v)
+  case "content":
+    # content-['›'] (for ::before / ::after); content-center... is align-content
+    if is_arb(v) { return []Decl{d("--tw-content", arbitrary(v)), d("content", "var(--tw-content)")} }
+    if v == "none" { return []Decl{d("--tw-content", "none"), d("content", "none")} }
+    al := map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "between": "space-between", "around": "space-around", "evenly": "space-evenly", "stretch": "stretch", "normal": "normal", "baseline": "baseline"}[v]
+    if al != "" { return one("align-content", al) }
   case "text":
     switch v {
     case "left", "center", "right", "justify", "start", "end": return one("text-align", v)
