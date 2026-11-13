@@ -3,7 +3,7 @@
 #   let card = style.def("card", "flex flex-col gap-3 rounded-[20px] bg-card p-7 ring-1 ring-border")
 #   <div class={card}>                 -> <div class="card">
 #   fs.write_file("site.css", css.compile(style.registry()), 420)
-#                                       (import "github.com/aecdanjundex/caju-style/css", build only)
+#                                       (import "github.com/cajulang/caju-style/css", build only)
 #
 # Styles are written with the utility vocabulary of Tailwind CSS (spacing, colors, typography,
 # flex and grid, borders, shadows, transitions, variants such as hover:, dark:, sm:, aria-*:,

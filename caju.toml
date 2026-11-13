@@ -1,5 +1,5 @@
 [package]
-name = "github.com/aecdanjundex/caju-style"
+name = "github.com/cajulang/caju-style"
 version = "0.1.0"
 description = "Utility-first CSS for Caju: Tailwind's vocabulary compiled to semantic classes, in Caju"
 license = "MIT"

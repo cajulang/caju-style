@@ -1,13 +1,13 @@
 # caju style
 
-Utility-first CSS for [Caju](https://github.com/aecdanjundex/cajulang), compiled to semantic
+Utility-first CSS for [Caju](https://github.com/cajulang/cajulang), compiled to semantic
 classes. You write styles with the utility vocabulary of Tailwind CSS, in Caju, and each style
 becomes **one class with a readable name**: the elements carry `class="hero-title"` instead of a
 dozen utilities, and the names stay readable instead of being shortened. The stylesheet is written
 by Caju: there is no Node and no Tailwind.
 
 ```caju
-import style "github.com/aecdanjundex/caju-style"
+import style "github.com/cajulang/caju-style"
 
 let card = style.def("card", "flex flex-col gap-3 rounded-[20px] bg-card p-7 ring-1 ring-border")
 let card_title = style.def("card-title", "text-xl font-bold sm:text-2xl")
@@ -92,8 +92,8 @@ a real site (`testdata/`), and all of them match.
 A build step writes the stylesheet after importing the program, so every `style.def` has run:
 
 ```caju
-import style "github.com/aecdanjundex/caju-style"
-import css "github.com/aecdanjundex/caju-style/css"
+import style "github.com/cajulang/caju-style"
+import css "github.com/cajulang/caju-style/css"
 import "std/fs"
 import "std/os"
 import "./theme"
@@ -154,7 +154,7 @@ have one def's class: the cascade between two defs on the same element is not de
 
 The cost of readable classes is a larger stylesheet than Tailwind's, because each class has its own
 combination of declarations, while the HTML gets smaller. On the
-[cajulang site](https://github.com/aecdanjundex/cajulang-ui-site) (seven pages), the total
+[cajulang site](https://github.com/cajulang/cajulang-ui-site) (seven pages), the total
 transfer went down by 10% (see its PERF.md).
 
 ## Tests

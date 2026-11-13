@@ -1,5 +1,5 @@
 # The compiler of caju style: turns the defs registered with the style module into a stylesheet.
-#   import "github.com/aecdanjundex/caju-style/css"
+#   import "github.com/cajulang/caju-style/css"
 #   fs.write_file("public/site.css", css.compile(style.registry()), 420)
 # It does not import the style module (a program can use both by path or as a package): the
 # registry comes as plain values.
