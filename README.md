@@ -76,6 +76,7 @@ a real site (`testdata/`), and all of them match.
 | `style.theme(name, value)` | a theme value, used as `var(--name)` (`"color-brand"`, `"font-sans"`) |
 | `style.theme_inline_value(name, value)` | a theme value written into the rules themselves |
 | `style.custom_variant(name, selectors)` | a variant: `"data-open"`, `"&:where([data-state=\"open\"])"` |
+| `style.sheet(name) -> str` | the defs that follow go to their own stylesheet (a page's styles) |
 | `style.registry()` | everything registered, for the compiler |
 
 `css` is the compiler, which only the build imports:
@@ -83,6 +84,7 @@ a real site (`testdata/`), and all of them match.
 | | |
 |---|---|
 | `css.compile(style.registry()) -> str` | the stylesheet |
+| `css.compile_sheets(style.registry()) -> map[str]str` | split by `style.sheet`: `""` is the main one, each other has just its classes |
 | `css.minify(text) -> str` | without indentation, line breaks and comments |
 | `css.unknown(style.registry()) -> []str` | the utilities it does not know, as `"def: utility"` |
 
@@ -121,6 +123,18 @@ let cell = style.def("memory-cell", "h-11 min-w-12 border px-3 data-[wide]:min-w
 
 <div class={cell} data-tone={tone} data-wide={wide}>{value}</div>
 ```
+
+## A sheet per page
+
+A site loads faster when each page brings only its own styles. A page's module starts with
+`let SHEET = style.sheet("home")`, and its defs go to that sheet. `css.compile_sheets` returns:
+
+- the main stylesheet: the theme, the reset, the base rules and the shared defs (cache it);
+- one sheet per page, with only that page's classes in the utilities layer. Load it after the main
+  one, or inline it in the page's `<head>` so it costs no request.
+
+On the cajulang site the main stylesheet went from 16.9 to 9.5 KB gzipped, and each page inlines
+1 to 3 KB.
 
 ## The output
 

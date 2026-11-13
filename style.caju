@@ -26,6 +26,7 @@ export struct Def {
   utilities: str
   layer: str         # "utilities" or "base"
   selector: str      # base rules: the selector (the def's class otherwise)
+  sheet: str         # the stylesheet it goes to ("": the main one)
 }
 
 export let defs: []*Def = []*Def{}
@@ -35,6 +36,14 @@ export let theme_vars = map[str]str{}
 export let theme_inline = map[str]bool{}
 export let custom_variants = map[str][]str{}
 export let custom_order: []str = []str{}
+let current_sheet = ""
+
+# the defs that follow go to their own stylesheet, named name (css.compile_sheets), e.g. the
+# styles of one page: let _sheet = style.sheet("home") at the top of the page's module
+export fn sheet(name: str) -> str {
+  current_sheet = name
+  return name
+}
 
 # a style: the utilities, compiled to one class named name (returned, for class={...})
 export fn def(name: str, utilities: str) -> str {
@@ -45,7 +54,7 @@ export fn def(name: str, utilities: str) -> str {
     return name
   }
   def_names[name] = true
-  defs = append(defs, &Def{name: name, utilities: utilities, layer: "utilities"})
+  defs = append(defs, &Def{name: name, utilities: utilities, layer: "utilities", sheet: current_sheet})
   return name
 }
 
@@ -85,7 +94,7 @@ export fn custom_variant(name: str, selectors: str) {
 # everything registered, as plain values, for the compiler: css.compile(style.registry())
 export fn registry() -> map[str]any {
   list := []any{}
-  for _, df := range defs { list = append(list, []any{df.layer, df.name, df.selector, df.utilities}) }
+  for _, df := range defs { list = append(list, []any{df.layer, df.name, df.selector, df.utilities, df.sheet}) }
   return map[str]any{
     "defs": list,
     "raws": raws,

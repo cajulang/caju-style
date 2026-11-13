@@ -10,6 +10,7 @@ struct Def {
   name: str
   selector: str
   utilities: str
+  sheet: str
 }
 
 let reg_defs: []*Def = []*Def{}
@@ -36,7 +37,9 @@ fn load(reg: map[str]any) {
   reg_defs = []*Def{}
   for _, x := range reg["defs"].([]any) {
     f := x.([]any)
-    reg_defs = append(reg_defs, &Def{layer: f[0].(str), name: f[1].(str), selector: f[2].(str), utilities: f[3].(str)})
+    sheet := ""
+    if len(f) > 4 { sheet = f[4].(str) }
+    reg_defs = append(reg_defs, &Def{layer: f[0].(str), name: f[1].(str), selector: f[2].(str), utilities: f[3].(str), sheet: sheet})
   }
   reg_raws = reg["raws"].([]str)
   theme_vars = map[str]str{}
@@ -1236,6 +1239,7 @@ struct Placed {
   sel: str
   g: *Group
   owner: int         # the def's index
+  sheet: str         # the def's sheet ("": the main stylesheet)
 }
 
 # rules with the same body share it: ".button:focus-visible, .button-ghost:focus-visible {...}"
@@ -1249,7 +1253,7 @@ fn merge_rules(rules: []Placed) -> []Placed {
   at := map[str]int{}
   for _, p := range rules {
     b := &strings.Builder{}
-    b.write(str(p.g.rank))
+    b.write(p.sheet + "\x03" + str(p.g.rank))
     for _, c := range p.g.ctx { b.write("\x01" + c) }
     for _, dc := range p.g.decls {
       b.write("\x02" + dc.prop + ":" + dc.value)
@@ -1258,7 +1262,7 @@ fn merge_rules(rules: []Placed) -> []Placed {
     key := b.string()
     solo := per_rank[str(p.owner) + "|" + str(p.g.rank)] == 1
     if k, ok := at[key]; ok && solo && !strings.contains(p.sel, "::-") && !strings.contains(out[k].sel, "::-") {
-      out[k] = Placed{sel: out[k].sel + ", " + p.sel, g: out[k].g, owner: out[k].owner}
+      out[k] = Placed{sel: out[k].sel + ", " + p.sel, g: out[k].g, owner: out[k].owner, sheet: out[k].sheet}
       continue
     }
     if _, ok := at[key]; !ok { at[key] = len(out) }
@@ -1280,7 +1284,14 @@ export fn unknown(reg: map[str]any) -> []str {
 
 # the whole stylesheet: layers, theme variables, the reset, base rules, the defs' classes, the
 # raw CSS, and the registered custom properties and keyframes the utilities use
-export fn compile(reg: map[str]any) -> str {
+export fn compile(reg: map[str]any) -> str { return build(reg, false)[""] }
+
+# the stylesheet split by the defs' sheets (style.sheet): "" is the main one, with everything but
+# the classes of the other sheets; each other sheet has just its classes (in the utilities layer),
+# to load or inline in the pages that use them, after the main one
+export fn compile_sheets(reg: map[str]any) -> map[str]str { return build(reg, true) }
+
+fn build(reg: map[str]any, split: bool) -> map[str]str {
   load(reg)
   used_vars = map[str]bool{}
   animations = map[str]bool{}
@@ -1293,7 +1304,7 @@ export fn compile(reg: map[str]any) -> str {
       for _, s := range g.sels {
         if df.layer == "base" { parts = append(parts, strings.replace_all(s, "&", df.selector)) } else { parts = append(parts, strings.replace_all(s, "&", "." + escape(df.name))) }
       }
-      p := Placed{sel: strings.join(parts, ", "), g: g, owner: di}
+      p := Placed{sel: strings.join(parts, ", "), g: g, owner: di, sheet: df.sheet}
       if df.layer == "base" { base_rules = append(base_rules, p) } else { util_rules = append(util_rules, p) }
     }
   }
@@ -1352,7 +1363,9 @@ export fn compile(reg: map[str]any) -> str {
   o.line("}")
   o.line("@layer utilities {")
   o.indent++
-  for _, p := range util_rules { o.rule(p.sel, p.g.ctx, p.g.decls) }
+  for _, p := range util_rules {
+    if !split || p.sheet == "" { o.rule(p.sel, p.g.ctx, p.g.decls) }
+  }
   o.indent--
   o.line("}")
   for _, r := range reg_raws {
@@ -1370,7 +1383,27 @@ export fn compile(reg: map[str]any) -> str {
   for _, a := range []str{"spin", "ping", "pulse", "enter", "exit"} {
     if animations[a] { o.b.write(keyframes(a)) }
   }
-  return o.b.string()
+  sheets := map[str]str{"": o.b.string()}
+  if split {
+    outs := map[str]*Out{}
+    for _, p := range util_rules {
+      if p.sheet == "" { continue }
+      so, ok := outs[p.sheet]
+      if !ok {
+        so = &Out{b: &strings.Builder{}}
+        so.line("@layer utilities {")
+        so.indent++
+        outs[p.sheet] = so
+      }
+      so.rule(p.sel, p.g.ctx, p.g.decls)
+    }
+    for name, so := range outs {
+      so.indent--
+      so.line("}")
+      sheets[name] = so.b.string()
+    }
+  }
+  return sheets
 }
 
 # the theme variables in a stable order: fonts, colors, spacing, sizes, the rest

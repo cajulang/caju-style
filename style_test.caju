@@ -84,6 +84,18 @@ describe("style.def", fn() {
     out := css.minify("/*! keep */\n@layer a {\n  /* drop */\n  .x {\n    color: red;\n    margin: 0 auto;\n  }\n}\n@layer b;\n")
     expect(out).to_equal("/*! keep */\n@layer a{.x{color:red;margin:0 auto}}@layer b;")
   })
+  it("splits the stylesheet by sheet", fn() {
+    style.def("shared-a", "p-4")
+    style.sheet("page-a")
+    style.def("only-a", "p-2 text-sm")
+    style.sheet("")
+    out := css.compile_sheets(style.registry())
+    expect(strings.contains(out[""], ".shared-a")).to_equal(true)
+    expect(strings.contains(out[""], ".only-a")).to_equal(false)
+    expect(strings.contains(out[""], "--text-sm:")).to_equal(true)
+    expect(strings.has_prefix(out["page-a"], "@layer utilities {")).to_equal(true)
+    expect(strings.contains(out["page-a"], ".only-a")).to_equal(true)
+  })
   it("chooses one of two styles", fn() {
     expect(style.pick(true, "tab-on", "tab")).to_equal("tab-on")
     expect(style.pick(false, "tab-on", "tab")).to_equal("tab")
