@@ -126,3 +126,144 @@ describe("style.base", fn() {
     expect(strings.contains(out[k:], "body {\n    background-color: var(--color-black);\n    color: var(--color-white);")).to_equal(true)
   })
 })
+
+# the compiled stylesheet and the warnings for one def's utilities
+fn warnings() -> str { return strings.join(css.unknown(style.registry()), " | ") }
+
+describe("arbitrary values are refused when they could break out of the rule", fn() {
+  it("refuses a content-[...] that would end an inline <style>", fn() {
+    style.def("evil-a", "p-1 before:content-['</style><script>alert(1)</script>']")
+    out := compiled()
+    expect(strings.contains(out, "</style>")).to_equal(false)
+    expect(strings.contains(out, "<script>")).to_equal(false)
+    expect(strings.contains(out, "alert")).to_equal(false)
+    expect(rule(out, ".evil-a")).to_equal("padding: var(--spacing);")
+    expect(strings.contains(warnings(), "evil-a: before:content-['</style><script>alert(1)</script>'] (refused: \"<\" in it)")).to_equal(true)
+  })
+  it("refuses a value that would end its declaration and its rule", fn() {
+    style.def("evil-b", "w-[1px;}body{display:none!important;}.x{color:red]")
+    out := compiled()
+    expect(strings.contains(out, "display:none")).to_equal(false)
+    expect(strings.contains(out, "body{")).to_equal(false)
+    expect(strings.contains(out, ".evil-b")).to_equal(false)
+    expect(strings.contains(warnings(), "evil-b: w-[1px;}body{display:none!important;}.x{color:red] (refused: \";\" in it)")).to_equal(true)
+  })
+  it("refuses an arbitrary property that would add a rule", fn() {
+    style.def("evil-c", "[color:red;}*{background:url(https://evil.example/x)}] text-[#123456]")
+    out := compiled()
+    expect(strings.contains(out, "evil.example")).to_equal(false)
+    expect(rule(out, ".evil-c")).to_equal("color: #123456;")
+    expect(strings.contains(warnings(), "evil-c: [color:red;}*{background:url(https://evil.example/x)}] (refused")).to_equal(true)
+  })
+  it("refuses braces, >, backslashes, comments and unbalanced quotes or brackets", fn() {
+    for _, bad := range []str{"w-[1px}", "w-[{1px]", "content-['a>b']", "content-['\\3c']", "w-[1px/*]", "[--x:*/]", "content-['open]", "w-[calc(1px]", "w-[1px)]", "bg-[red]]", "w-[1px\x01]"} {
+      expect(css.unsafe(bad) != "").to_equal(true)
+    }
+  })
+  it("keeps the safe forms: selectors with >, \\_, quotes and nested brackets", fn() {
+    for _, ok := range []str{"[&>svg]:size-3", "has-[>img:first-child]:pt-0", "content-['a\\_b']", "content-['›']", "grid-cols-[minmax(0,1fr)_auto]", "[mask-image:linear-gradient(to_bottom,#000,transparent)]", "data-[state=open]:p-2", "bg-[url('/a(1).png')]"} {
+      expect(css.unsafe(ok)).to_equal("")
+    }
+  })
+  it("escapes < and control characters in class names, and </ for inline <style>", fn() {
+    expect(css.escape("a<b")).to_equal("a\\3c b")
+    expect(css.escape("a\nb")).to_equal("a\\a b")
+    expect(css.for_style_tag(".x::before { content: \"</style>\"; }")).to_equal(".x::before { content: \"<\\/style>\"; }")
+  })
+})
+
+describe("grid placement, flex direction and alignment", fn() {
+  it("knows col-start/end, row-start/end, row-span and col-*", fn() {
+    style.def("cell-a", "col-start-2 col-end-4 row-start-1 row-end-[span_2] row-span-3")
+    r := rule(compiled(), ".cell-a")
+    for _, want := range []str{"grid-column-start: 2", "grid-column-end: 4", "grid-row-start: 1", "grid-row-end: span 2", "grid-row: span 3 / span 3"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+    style.def("cell-b", "-col-start-1 col-end-auto row-span-full col-span-[2]")
+    r = rule(compiled(), ".cell-b")
+    for _, want := range []str{"grid-column-start: calc(1 * -1)", "grid-column-end: auto", "grid-row: 1 / -1", "grid-column: span 2 / span 2"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+  })
+  it("knows the reversed flex directions", fn() {
+    style.def("rev-a", "flex flex-row-reverse")
+    style.def("rev-b", "flex flex-col-reverse flex-wrap-reverse")
+    out := compiled()
+    expect(rule(out, ".rev-a")).to_equal("display: flex; flex-direction: row-reverse;")
+    expect(rule(out, ".rev-b")).to_equal("display: flex; flex-direction: column-reverse; flex-wrap: wrap-reverse;")
+  })
+  it("knows place-*, justify-self, justify-items, self-* and order-*", fn() {
+    style.def("place-a", "place-content-between place-items-center place-self-end justify-self-center justify-items-start self-end order-2 -order-1")
+    r := rule(compiled(), ".place-a")
+    for _, want := range []str{"place-content: space-between", "place-items: center", "place-self: end", "justify-self: center", "justify-items: start", "align-self: flex-end", "order: calc(1 * -1)"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+  })
+  it("knows line-clamp-*, truncate, aspect-*, size-*, inset-* and start/end", fn() {
+    style.def("misc-a", "line-clamp-none aspect-4/3 size-10 inset-x-2 inset-s-1 end-[3px] text-ellipsis invisible")
+    r := rule(compiled(), ".misc-a")
+    for _, want := range []str{"-webkit-line-clamp: unset", "aspect-ratio: 4/3", "width: calc(var(--spacing) * 10)", "height: calc(var(--spacing) * 10)", "inset-inline: calc(var(--spacing) * 2)", "inset-inline-start: var(--spacing)", "inset-inline-end: 3px", "text-overflow: ellipsis", "visibility: hidden"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+    style.def("misc-b", "aspect-video truncate line-clamp-3")
+    out := compiled()
+    expect(strings.contains(rule(out, ".misc-b"), "aspect-ratio: var(--aspect-video)")).to_equal(true)
+    expect(strings.contains(out, "--aspect-video: 16 / 9;")).to_equal(true)
+    expect(strings.contains(rule(out, ".misc-b"), "-webkit-line-clamp: 3")).to_equal(true)
+  })
+  it("reports unknown keywords instead of writing empty declarations", fn() {
+    style.def("bad-b", "self-zz items-zz justify-self-zz overflow-zz place-items-zz")
+    w := warnings()
+    for _, x := range []str{"self-zz", "items-zz", "justify-self-zz", "overflow-zz", "place-items-zz"} {
+      expect(strings.contains(w, "bad-b: " + x)).to_equal(true)
+    }
+  })
+})
+
+describe("space and divide", fn() {
+  it("writes space-x/y-* for the children but the last", fn() {
+    style.def("stack-a", "flex space-x-4")
+    out := compiled()
+    expect(rule(out, ".stack-a")).to_equal("display: flex;")
+    expect(rule(out, ":where(.stack-a > :not(:last-child))")).to_equal("--tw-space-x-reverse: 0; margin-inline-start: calc(calc(var(--spacing) * 4) * var(--tw-space-x-reverse)); margin-inline-end: calc(calc(var(--spacing) * 4) * calc(1 - var(--tw-space-x-reverse)));")
+    style.def("stack-b", "space-y-2 space-y-reverse")
+    expect(strings.contains(rule(compiled(), ":where(.stack-b > :not(:last-child))"), "--tw-space-y-reverse: 1; margin-block-start: calc(calc(var(--spacing) * 2) * var(--tw-space-y-reverse))")).to_equal(true)
+  })
+  it("writes divide-x/y with widths, colors, styles and -reverse", fn() {
+    style.def("list-a", "border border-black divide-y divide-white divide-dashed")
+    out := compiled()
+    expect(strings.contains(rule(out, ".list-a"), "border-color: var(--color-black)")).to_equal(true)
+    r := rule(out, ":where(.list-a > :not(:last-child))")
+    for _, want := range []str{"--tw-divide-y-reverse: 0", "border-top-width: calc(1px * var(--tw-divide-y-reverse))", "border-bottom-width: calc(1px * calc(1 - var(--tw-divide-y-reverse)))", "border-color: var(--color-white)", "border-style: dashed"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+    style.def("list-b", "divide-x-2 divide-x-reverse divide-black/50")
+    r = rule(compiled(), ":where(.list-b > :not(:last-child))")
+    for _, want := range []str{"--tw-divide-x-reverse: 1", "border-inline-style: var(--tw-border-style)", "border-inline-start-width: calc(2px * var(--tw-divide-x-reverse))", "border-color: color-mix(in srgb, #000 50%, transparent)"} {
+      expect(strings.contains(r, want)).to_equal(true)
+    }
+  })
+  it("keeps the variants: md:divide-x", fn() {
+    style.def("list-c", "md:divide-x")
+    expect(strings.contains(compiled(), "@media (width >= 48rem) {\n    :where(.list-c > :not(:last-child)) {")).to_equal(true)
+  })
+})
+
+describe("dark mode", fn() {
+  it("follows the system with dark_mode(\"media\"), and goes back to the selector", fn() {
+    style.dark_mode("media")
+    style.def("night-a", "bg-white dark:bg-black")
+    style.base(":root", "[--surface:#fff] dark:[--surface:#111]")
+    out := compiled()
+    expect(strings.contains(out, "@media (prefers-color-scheme: dark) {\n    .night-a {\n      background-color: var(--color-black);")).to_equal(true)
+    expect(strings.contains(out, "@media (prefers-color-scheme: dark) {\n    :root {\n      --surface: #111;")).to_equal(true)
+    expect(strings.contains(out, ".night-a:is(.dark *)")).to_equal(false)
+    style.dark_mode("selector")
+    expect(strings.contains(compiled(), ".night-a:is(.dark *) {")).to_equal(true)
+  })
+  it("accepts an at-rule as a custom variant", fn() {
+    style.custom_variant("tall", "@media (height >= 50rem)")
+    style.def("tall-a", "tall:p-8")
+    expect(strings.contains(compiled(), "@media (height >= 50rem) {\n    .tall-a {\n      padding: calc(var(--spacing) * 8);")).to_equal(true)
+  })
+})

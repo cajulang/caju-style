@@ -69,7 +69,8 @@ export fn base(selector: str, utilities: str) {
   defs = append(defs, &Def{name: selector, utilities: utilities, layer: "base", selector: selector})
 }
 
-# CSS written as is, after the generated rules (@font-face, the theme's custom properties...)
+# CSS written as is, after the generated rules (@font-face, the theme's custom properties...).
+# Trusted, like base selectors, theme values and custom variants: never pass it user input.
 export fn raw(css: str) { raws = append(raws, css) }
 
 # a theme value, referenced as var(--name) by the utilities that use it
@@ -85,10 +86,23 @@ export fn theme_inline_value(name: str, value: str) {
 }
 
 # a variant: name: applies the utility to the selectors given, with & for the element
-# ("data-open", ":where([data-state=\"open\"])"), several separated by " || "
+# ("data-open", "&:where([data-state=\"open\"])"), several separated by " || "; or an at-rule
+# around the rule, alone ("wide", "@media (width >= 90rem)"). Trusted: written as it is.
 export fn custom_variant(name: str, selectors: str) {
   if _, ok := custom_variants[name]; !ok { custom_order = append(custom_order, name) }
   custom_variants[name] = strings.split(selectors, " || ")
+}
+
+# how dark: applies: "media" follows the system (@media (prefers-color-scheme: dark)); "selector"
+# (the default) applies inside an element with the class dark (&:is(.dark *))
+export fn dark_mode(strategy: str) {
+  if strategy == "media" {
+    custom_variant("dark", "@media (prefers-color-scheme: dark)")
+  } else if strategy == "selector" || strategy == "class" {
+    custom_variant("dark", "&:is(.dark *)")
+  } else {
+    panic("style.dark_mode: \"" + strategy + "\" is not \"media\" or \"selector\"")
+  }
 }
 
 # everything registered, as plain values, for the compiler: css.compile(style.registry())

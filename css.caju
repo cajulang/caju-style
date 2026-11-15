@@ -23,6 +23,8 @@ export struct Decl {
   supports: str      # "": always; otherwise the @supports condition (the color-mix of /opacity)
   rank: int          # the output order: the utility's place in the property order, then the
   idx: int           # declaration's place in the utility (each utility keeps its own order)
+  child: bool        # for the children but the last (space-x-*, divide-*):
+                     # :where(& > :not(:last-child))
 }
 
 let used_vars = map[str]bool{}
@@ -106,6 +108,7 @@ fn defaults() {
   dt("animate-spin", "spin 1s linear infinite")
   dt("animate-ping", "ping 1s cubic-bezier(0, 0, 0.2, 1) infinite")
   dt("animate-pulse", "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite")
+  dt("aspect-video", "16 / 9")
   dt("blur-xs", "4px")
   dt("blur-sm", "8px")
   dt("blur-md", "12px")
@@ -288,6 +291,98 @@ fn color_decls(prop: str, v: str) -> []Decl {
 
 fn d(prop: str, value: str) -> Decl { return Decl{prop: prop, value: value} }
 fn one(prop: str, value: str) -> []Decl { return []Decl{d(prop, value)} }
+# a declaration for the element's children but the last (space-x-*, divide-*)
+fn kid(prop: str, value: str) -> Decl { return Decl{prop: prop, value: value, child: true} }
+
+# one declaration when the value is known (a keyword missing from a map gives ""), nil otherwise
+fn known(prop: str, value: str) -> []Decl {
+  if value == "" { return nil }
+  return one(prop, value)
+}
+
+# a CSS keyword: lowercase letters, digits and dashes (overflow-auto, cursor-not-allowed...)
+fn is_ident(s: str) -> bool {
+  if s == "" { return false }
+  for i := 0; i < len(s); i++ {
+    c := int(s[i])
+    if !((c >= 'a' && c <= 'z') || is_digit(c) || c == '-') { return false }
+  }
+  return true
+}
+
+# a number, maybe negative (-order-2 -> calc(2 * -1)), or an arbitrary value
+fn int_value(v: str, neg: bool) -> str {
+  if is_number(v) && !strings.contains(v, ".") {
+    if neg { return "calc(" + v + " * -1)" }
+    return v
+  }
+  if is_arb(v) {
+    if neg { return "calc(" + arbitrary(v) + " * -1)" }
+    return arbitrary(v)
+  }
+  if is_var(v) { return var_of(v) }
+  return ""
+}
+
+# a grid line (col-start-2, row-end-auto, -col-start-1, col-start-[span_2])
+fn grid_line(v: str, neg: bool) -> str {
+  if v == "auto" && !neg { return "auto" }
+  return int_value(v, neg)
+}
+
+const ALIGN = "start flex-start, end flex-end, center center, between space-between, around space-around, evenly space-evenly, stretch stretch, baseline baseline, normal normal, auto auto"
+
+# a keyword of the box alignment utilities, from the list allowed ("start end center"), as
+# Tailwind writes it for the property: flex-start for the flex ones, start for place-*
+fn align_value(v: str, allowed: str, flex: bool) -> str {
+  ok := false
+  for _, a := range strings.split(allowed, " ") {
+    if a == v { ok = true }
+  }
+  if !ok { return "" }
+  if !flex {
+    if v == "between" { return "space-between" }
+    if v == "around" { return "space-around" }
+    if v == "evenly" { return "space-evenly" }
+    return v
+  }
+  for _, p := range strings.split(ALIGN, ", ") {
+    k := strings.index(p, " ")
+    if p[0:k] == v { return p[k + 1:] }
+  }
+  return ""
+}
+
+const SPACE_X = "--tw-space-x-reverse"
+const SPACE_Y = "--tw-space-y-reverse"
+const DIVIDE_X = "--tw-divide-x-reverse"
+const DIVIDE_Y = "--tw-divide-y-reverse"
+
+fn space_decls(axis: str, s: str) -> []Decl {
+  if axis == "x" {
+    return []Decl{kid(SPACE_X, "0"), kid("margin-inline-start", "calc(" + s + " * var(" + SPACE_X + "))"), kid("margin-inline-end", "calc(" + s + " * calc(1 - var(" + SPACE_X + ")))")}
+  }
+  return []Decl{kid(SPACE_Y, "0"), kid("margin-block-start", "calc(" + s + " * var(" + SPACE_Y + "))"), kid("margin-block-end", "calc(" + s + " * calc(1 - var(" + SPACE_Y + ")))")}
+}
+
+fn divide_decls(axis: str, w: str) -> []Decl {
+  if axis == "x" {
+    return []Decl{kid(DIVIDE_X, "0"), kid("border-inline-style", "var(--tw-border-style)"), kid("border-inline-start-width", "calc(" + w + " * var(" + DIVIDE_X + "))"), kid("border-inline-end-width", "calc(" + w + " * calc(1 - var(" + DIVIDE_X + ")))")}
+  }
+  return []Decl{kid(DIVIDE_Y, "0"), kid("border-bottom-style", "var(--tw-border-style)"), kid("border-top-style", "var(--tw-border-style)"), kid("border-top-width", "calc(" + w + " * var(" + DIVIDE_Y + "))"), kid("border-bottom-width", "calc(" + w + " * calc(1 - var(" + DIVIDE_Y + ")))")}
+}
+
+# the declarations, all for the children but the last
+fn kids(list: []Decl) -> []Decl {
+  if list == nil { return nil }
+  out := []Decl{}
+  for _, x := range list {
+    y := x
+    y.child = true
+    out = append(out, y)
+  }
+  return out
+}
 
 const SHADOW = "var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow)"
 const BACKDROP = "var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,)"
@@ -481,11 +576,49 @@ fn utility(u: str) -> []Decl {
   case "pointer-events-none": return one("pointer-events", "none")
   case "pointer-events-auto": return one("pointer-events", "auto")
   case "grid-cols-none": return one("grid-template-columns", "none")
+  case "grid-rows-none": return one("grid-template-rows", "none")
+  case "grid-cols-subgrid": return one("grid-template-columns", "subgrid")
+  case "grid-rows-subgrid": return one("grid-template-rows", "subgrid")
+  case "grid-flow-dense": return one("grid-auto-flow", "dense")
+  case "grid-flow-row-dense": return one("grid-auto-flow", "row dense")
+  case "grid-flow-col-dense": return one("grid-auto-flow", "column dense")
+  case "auto-cols-auto": return one("grid-auto-columns", "auto")
+  case "auto-cols-min": return one("grid-auto-columns", "min-content")
+  case "auto-cols-max": return one("grid-auto-columns", "max-content")
+  case "auto-rows-auto": return one("grid-auto-rows", "auto")
+  case "auto-rows-max": return one("grid-auto-rows", "max-content")
+  case "col-auto": return one("grid-column", "auto")
+  case "row-auto": return one("grid-row", "auto")
+  case "col-span-full": return one("grid-column", "1 / -1")
+  case "row-span-full": return one("grid-row", "1 / -1")
+  case "flex-row-reverse": return one("flex-direction", "row-reverse")
+  case "flex-col-reverse": return one("flex-direction", "column-reverse")
+  case "flex-wrap-reverse": return one("flex-wrap", "wrap-reverse")
+  case "flex-initial": return one("flex", "0 auto")
+  case "visible": return one("visibility", "visible")
+  case "invisible": return one("visibility", "hidden")
+  case "collapse": return one("visibility", "collapse")
+  case "isolate": return one("isolation", "isolate")
+  case "isolation-auto": return one("isolation", "auto")
+  case "box-border": return one("box-sizing", "border-box")
+  case "box-content": return one("box-sizing", "content-box")
+  case "text-ellipsis": return one("text-overflow", "ellipsis")
+  case "text-clip": return one("text-overflow", "clip")
+  case "line-clamp-none": return []Decl{d("overflow", "visible"), d("display", "block"), d("-webkit-box-orient", "horizontal"), d("-webkit-line-clamp", "unset")}
+  case "space-x-reverse": return []Decl{kid(SPACE_X, "1")}
+  case "space-y-reverse": return []Decl{kid(SPACE_Y, "1")}
+  case "divide-x": return divide_decls("x", "1px")
+  case "divide-y": return divide_decls("y", "1px")
+  case "divide-x-reverse": return []Decl{kid(DIVIDE_X, "1")}
+  case "divide-y-reverse": return []Decl{kid(DIVIDE_Y, "1")}
+  case "divide-solid", "divide-dashed", "divide-dotted", "divide-double", "divide-hidden", "divide-none":
+    s := u[7:]
+    return []Decl{kid("--tw-border-style", s), kid("border-style", s)}
   }
   dash := strings.index(u, "-")
   if dash < 0 { return nil }
   # the longest prefix that names a utility family
-  fams := []str{"inset-x", "inset-y", "inset", "top", "right", "bottom", "left", "z", "order", "grid-cols", "grid-rows", "col-span", "row-span", "gap-x", "gap-y", "gap", "size", "min-w", "min-h", "max-w", "max-h", "w", "h", "px", "py", "pt", "pr", "pb", "pl", "p", "mx", "my", "mt", "mr", "mb", "ml", "m", "overflow-x", "overflow-y", "overflow", "items", "justify", "self", "place-items", "content", "text", "font", "leading", "tracking", "whitespace", "align", "bg", "border-x", "border-y", "border-t", "border-r", "border-b", "border-l", "border", "rounded-t", "rounded-r", "rounded-b", "rounded-l", "rounded", "ring-offset", "ring", "shadow", "outline-offset", "outline", "opacity", "duration", "delay", "ease", "animate", "fade-in", "fade-out", "zoom-in", "zoom-out", "slide-in-from-top", "slide-in-from-bottom", "slide-in-from-left", "slide-in-from-right", "slide-out-to-top", "slide-out-to-bottom", "slide-out-to-left", "slide-out-to-right", "translate-x", "translate-y", "backdrop-blur", "cursor", "fill", "stroke", "caret", "accent", "decoration", "underline-offset", "origin", "scroll-mt", "scroll-mb", "scroll-pt", "flex", "basis", "line-clamp", "aspect", "object", "list", "will-change", "@container"}
+  fams := []str{"inset-x", "inset-y", "inset-s", "inset-e", "inset", "top", "right", "bottom", "left", "z", "start", "end", "order", "grid-cols", "grid-rows", "col-span", "col-start", "col-end", "col", "row-span", "row-start", "row-end", "row", "space-x", "space-y", "divide-x", "divide-y", "divide", "gap-x", "gap-y", "gap", "size", "min-w", "min-h", "max-w", "max-h", "w", "h", "px", "py", "pt", "pr", "pb", "pl", "p", "mx", "my", "mt", "mr", "mb", "ml", "m", "overflow-x", "overflow-y", "overflow", "items", "justify-items", "justify-self", "justify", "self", "place-items", "place-content", "place-self", "content", "text", "font", "leading", "tracking", "whitespace", "align", "bg", "border-x", "border-y", "border-t", "border-r", "border-b", "border-l", "border", "rounded-t", "rounded-r", "rounded-b", "rounded-l", "rounded", "ring-offset", "ring", "shadow", "outline-offset", "outline", "opacity", "duration", "delay", "ease", "animate", "fade-in", "fade-out", "zoom-in", "zoom-out", "slide-in-from-top", "slide-in-from-bottom", "slide-in-from-left", "slide-in-from-right", "slide-out-to-top", "slide-out-to-bottom", "slide-out-to-left", "slide-out-to-right", "translate-x", "translate-y", "backdrop-blur", "cursor", "fill", "stroke", "caret", "accent", "decoration", "underline-offset", "origin", "scroll-mt", "scroll-mb", "scroll-pt", "flex", "basis", "line-clamp", "aspect", "object", "list", "will-change", "@container"}
   fam := ""
   for _, f := range fams {
     if strings.has_prefix(u, f + "-") || (f == "@container" && strings.has_prefix(u, "@container")) {
@@ -507,25 +640,46 @@ fn utility(u: str) -> []Decl {
     if s == "" { return nil }
     return one(fam, s)
   case "inset-x":
-    return one("inset-inline", spacing(v, neg))
+    return known("inset-inline", spacing(v, neg))
   case "inset-y":
-    return one("inset-block", spacing(v, neg))
+    return known("inset-block", spacing(v, neg))
+  case "start", "inset-s":
+    return known("inset-inline-start", spacing(v, neg))
+  case "end", "inset-e":
+    return known("inset-inline-end", spacing(v, neg))
   case "z":
-    if is_number(v) { return one("z-index", v) }
-    if v == "auto" { return one("z-index", "auto") }
-    if is_arb(v) { return one("z-index", arbitrary(v)) }
+    if v == "auto" && !neg { return one("z-index", "auto") }
+    return known("z-index", int_value(v, neg))
   case "order":
-    if is_number(v) { return one("order", v) }
+    return known("order", int_value(v, neg))
   case "grid-cols", "grid-rows":
     prop := "grid-template-columns"
     if fam == "grid-rows" { prop = "grid-template-rows" }
     if is_number(v) { return one(prop, "repeat(" + v + ", minmax(0, 1fr))") }
     if is_arb(v) { return one(prop, arbitrary(v)) }
-  case "col-span":
-    if is_number(v) { return one("grid-column", "span " + v + " / span " + v) }
-    if v == "full" { return one("grid-column", "1 / -1") }
-  case "row-span":
-    if is_number(v) { return one("grid-row", "span " + v + " / span " + v) }
+  case "col-span", "row-span":
+    prop := "grid-column"
+    if fam == "row-span" { prop = "grid-row" }
+    n := int_value(v, false)
+    if n == "" || neg { return nil }
+    return one(prop, "span " + n + " / span " + n)
+  case "col", "row":
+    prop := "grid-column"
+    if fam == "row" { prop = "grid-row" }
+    return known(prop, grid_line(v, neg))
+  case "col-start", "col-end", "row-start", "row-end":
+    prop := map[str]str{"col-start": "grid-column-start", "col-end": "grid-column-end", "row-start": "grid-row-start", "row-end": "grid-row-end"}[fam]
+    return known(prop, grid_line(v, neg))
+  case "space-x", "space-y":
+    s := spacing(v, neg)
+    if s == "" || v == "auto" || v == "full" { return nil }
+    return space_decls(fam[len(fam) - 1:], s)
+  case "divide-x", "divide-y":
+    w := border_width(v)
+    if w == "" { return nil }
+    return divide_decls(fam[len(fam) - 1:], w)
+  case "divide":
+    return kids(color_decls("border-color", v))
   case "gap":
     return one("gap", spacing(v, false))
   case "gap-x":
@@ -559,15 +713,23 @@ fn utility(u: str) -> []Decl {
     case "l": return one(kind + "-left", s)
     }
   case "overflow", "overflow-x", "overflow-y":
-    return one(fam, v)
+    return known(fam, align_value(v, "auto hidden clip visible scroll", false))
   case "items":
-    return one("align-items", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "baseline": "baseline", "stretch": "stretch"}[v])
+    return known("align-items", align_value(v, "start end center baseline stretch", true))
   case "justify":
-    return one("justify-content", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "between": "space-between", "around": "space-around", "evenly": "space-evenly", "stretch": "stretch"}[v])
+    return known("justify-content", align_value(v, "start end center between around evenly stretch normal baseline", true))
+  case "justify-items":
+    return known("justify-items", align_value(v, "start end center stretch normal", false))
+  case "justify-self":
+    return known("justify-self", align_value(v, "auto start end center stretch", true))
   case "self":
-    return one("align-self", map[str]str{"start": "flex-start", "end": "flex-end", "center": "center", "auto": "auto", "stretch": "stretch", "baseline": "baseline"}[v])
+    return known("align-self", align_value(v, "auto start end center stretch baseline", true))
   case "place-items":
-    return one("place-items", v)
+    return known("place-items", align_value(v, "start end center baseline stretch", false))
+  case "place-content":
+    return known("place-content", align_value(v, "start end center between around evenly baseline stretch", false))
+  case "place-self":
+    return known("place-self", align_value(v, "auto start end center stretch", false))
   case "content":
     # content-['›'] (for ::before / ::after); content-center... is align-content
     if is_arb(v) { return []Decl{d("--tw-content", arbitrary(v)), d("content", "var(--tw-content)")} }
@@ -602,9 +764,9 @@ fn utility(u: str) -> []Decl {
     if val == "" { return nil }
     return []Decl{d("--tw-tracking", val), d("letter-spacing", val)}
   case "whitespace":
-    return one("white-space", v)
+    return known("white-space", align_value(v, "normal nowrap pre pre-line pre-wrap break-spaces", false))
   case "align":
-    return one("vertical-align", v)
+    return known("vertical-align", align_value(v, "baseline top middle bottom text-top text-bottom sub super", false))
   case "bg":
     if is_arb(v) {
       a := arbitrary(v)
@@ -712,7 +874,8 @@ fn utility(u: str) -> []Decl {
     if val == "" { return nil }
     return []Decl{d("--tw-backdrop-blur", val), d("-webkit-backdrop-filter", BACKDROP), d("backdrop-filter", BACKDROP)}
   case "cursor":
-    return one("cursor", v)
+    if is_ident(v) { return one("cursor", v) }
+    if is_arb(v) { return one("cursor", arbitrary(v)) }
   case "fill":
     return color_decls("fill", v)
   case "stroke":
@@ -737,17 +900,28 @@ fn utility(u: str) -> []Decl {
   case "basis":
     return one("flex-basis", size(v, "w"))
   case "line-clamp":
-    if is_number(v) { return []Decl{d("overflow", "hidden"), d("display", "-webkit-box"), d("-webkit-box-orient", "vertical"), d("-webkit-line-clamp", v)} }
+    n := int_value(v, false)
+    if n != "" && !neg { return []Decl{d("overflow", "hidden"), d("display", "-webkit-box"), d("-webkit-box-orient", "vertical"), d("-webkit-line-clamp", n)} }
   case "aspect":
     switch v {
+    case "auto": return one("aspect-ratio", "auto")
     case "square": return one("aspect-ratio", "1 / 1")
-    case "video": return one("aspect-ratio", "var(--aspect-video)")
+    case "video": return one("aspect-ratio", tv("aspect-video"))
     }
+    if is_fraction(v) { return one("aspect-ratio", v) }
     if is_arb(v) { return one("aspect-ratio", arbitrary(v)) }
+    if is_var(v) { return one("aspect-ratio", var_of(v)) }
   case "object":
-    return one("object-fit", v)
+    fit := align_value(v, "contain cover fill none scale-down", false)
+    if fit != "" { return one("object-fit", fit) }
+    pos := align_value(v, "top bottom left right center left-top left-bottom right-top right-bottom top-left top-right bottom-left bottom-right", false)
+    if pos != "" { return one("object-position", strings.replace_all(pos, "-", " ")) }
   case "will-change":
-    return one("will-change", v)
+    if v == "auto" || v == "scroll" || v == "contents" || v == "transform" {
+      if v == "scroll" { return one("will-change", "scroll-position") }
+      return one("will-change", v)
+    }
+    if is_arb(v) { return one("will-change", arbitrary(v)) }
   }
   return nil
 }
@@ -819,7 +993,7 @@ fn suffix_of(v: str) -> str {
     return "[data-" + a[0:k] + "=\"" + a[k + 1:] + "\"]"
   }
   if strings.has_prefix(v, "data-") {
-    if c, ok := custom_variants[v]; ok && len(c) == 1 { return strings.replace_all(c[0], "&", "") }
+    if c, ok := custom_variants[v]; ok && len(c) == 1 && !strings.has_prefix(c[0], "@") { return strings.replace_all(c[0], "&", "") }
     return "[data-" + v[5:] + "]"
   }
   switch v {
@@ -863,6 +1037,14 @@ fn apply_variant(t: *Target, v: str) -> bool {
     }
   }
   if c, ok := custom_variants[v]; ok {
+    # an at-rule ("@media (prefers-color-scheme: dark)") is a variant on its own
+    if len(c) == 1 && strings.has_prefix(c[0], "@") {
+      t.ctx = append(t.ctx, c[0])
+      return true
+    }
+    for _, x := range c {
+      if strings.has_prefix(x, "@") { return false }
+    }
     out := []str{}
     for _, s := range t.sels {
       for _, x := range c { out = append(out, strings.replace_all(x, "&", s)) }
@@ -1037,7 +1219,7 @@ struct Group {
 }
 
 # the property order of the output (so shorthands come before their longhands, as in Tailwind)
-const PROPS = "container-type container-name pointer-events visibility position width height padding margin overflow clip-path white-space border-width inset inset-inline inset-block top right bottom left z-index order grid-column grid-row float clear margin-inline margin-block margin-top margin-right margin-bottom margin-left box-sizing display aspect-ratio max-height min-height max-width min-width flex flex-shrink flex-grow flex-basis table-layout caption-side border-collapse transform-origin --tw-translate-x --tw-translate-y translate scale rotate transform animation cursor touch-action resize scroll-margin-top scroll-margin-bottom scroll-padding-top list-style-type appearance grid-auto-columns grid-auto-flow grid-auto-rows grid-template-columns grid-template-rows flex-direction flex-wrap place-items align-items justify-content gap column-gap row-gap align-self overflow-x overflow-y text-overflow border-radius border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius --tw-border-style border-style border-inline-style border-inline-width border-block-style border-block-width border-top-style border-top-width border-right-style border-right-width border-bottom-style border-bottom-width border-left-style border-left-width border-color border-top-color border-bottom-color border-left-color border-right-color background-color background-image mask-image background-size -webkit-background-clip background-clip fill stroke object-fit padding-inline padding-block padding-top padding-right padding-bottom padding-left text-align vertical-align font-family font-size line-height --tw-leading --tw-font-weight font-weight --tw-tracking letter-spacing text-wrap overflow-wrap word-break color text-transform font-style text-decoration-line text-decoration-color text-underline-offset caret-color accent-color opacity --tw-shadow --tw-shadow-color box-shadow --tw-ring-shadow --tw-ring-color outline outline-offset --tw-outline-style outline-style outline-width outline-color --tw-backdrop-blur -webkit-backdrop-filter backdrop-filter transition-property transition-timing-function transition-duration transition-delay --tw-duration --tw-ease will-change -webkit-user-select user-select --tw-enter-opacity --tw-enter-scale --tw-enter-translate-x --tw-enter-translate-y --tw-exit-opacity --tw-exit-scale --tw-exit-translate-x --tw-exit-translate-y"
+const PROPS = "container-type container-name pointer-events visibility position width height padding margin overflow clip-path white-space border-width inset inset-inline inset-block inset-inline-start inset-inline-end top right bottom left isolation z-index order grid-column grid-column-start grid-column-end grid-row grid-row-start grid-row-end float clear margin-inline margin-block margin-top margin-right margin-bottom margin-left box-sizing display aspect-ratio max-height min-height max-width min-width flex flex-shrink flex-grow flex-basis table-layout caption-side border-collapse transform-origin --tw-translate-x --tw-translate-y translate scale rotate transform animation cursor touch-action resize scroll-margin-top scroll-margin-bottom scroll-padding-top list-style-type appearance grid-auto-columns grid-auto-flow grid-auto-rows grid-template-columns grid-template-rows flex-direction flex-wrap place-content place-items align-content align-items justify-content justify-items gap column-gap row-gap --tw-space-x-reverse --tw-space-y-reverse --tw-divide-x-reverse --tw-divide-y-reverse place-self align-self justify-self overflow-x overflow-y text-overflow border-radius border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius --tw-border-style border-style border-inline-style border-inline-width border-block-style border-block-width border-top-style border-top-width border-right-style border-right-width border-bottom-style border-bottom-width border-left-style border-left-width border-color border-top-color border-bottom-color border-left-color border-right-color background-color background-image mask-image background-size -webkit-background-clip background-clip fill stroke object-fit object-position padding-inline padding-block padding-top padding-right padding-bottom padding-left text-align vertical-align font-family font-size line-height --tw-leading --tw-font-weight font-weight --tw-tracking letter-spacing text-wrap overflow-wrap word-break color text-transform font-style text-decoration-line text-decoration-color text-underline-offset caret-color accent-color opacity --tw-shadow --tw-shadow-color box-shadow --tw-ring-shadow --tw-ring-color outline outline-offset --tw-outline-style outline-style outline-width outline-color --tw-backdrop-blur -webkit-backdrop-filter backdrop-filter transition-property transition-timing-function transition-duration transition-delay --tw-duration --tw-ease will-change -webkit-user-select user-select --tw-enter-opacity --tw-enter-scale --tw-enter-translate-x --tw-enter-translate-y --tw-exit-opacity --tw-exit-scale --tw-exit-translate-x --tw-exit-translate-y"
 
 let prop_rank_cache = map[str]int{}
 
@@ -1058,7 +1240,16 @@ fn compile_def(utilities: str, warn: []str) -> ([]*Group, []str) {
   defaults()
   groups := []*Group{}
   index := map[str]*Group{}
-  for _, tok := range winners(strings.fields(utilities)) {
+  safe := []str{}
+  for _, tok := range strings.fields(utilities) {
+    why := unsafe(tok)
+    if why == "" {
+      safe = append(safe, tok)
+    } else {
+      warn = append(warn, tok + " (refused: " + why + ")")
+    }
+  }
+  for _, tok := range winners(safe) {
     important := false
     if strings.has_suffix(tok, "!") {
       important = true
@@ -1100,11 +1291,16 @@ fn compile_def(utilities: str, warn: []str) -> ([]*Group, []str) {
         if !strings.has_prefix(cond, "@") { cond = "@supports " + cond }
         ctx = append(append([]str{}, t.ctx...), cond)
       }
-      key := strings.join(ctx, "|") + "#" + strings.join(t.sels, ",")
+      sels := t.sels
+      if dc.child {
+        sels = []str{}
+        for _, s := range t.sels { sels = append(sels, ":where(" + s + " > :not(:last-child))") }
+      }
+      key := strings.join(ctx, "|") + "#" + strings.join(sels, ",")
       g, exists := index[key]
       if !exists {
         seq_counter++
-        g = &Group{key: key, ctx: ctx, sels: t.sels, rank: rank, seq: seq_counter}
+        g = &Group{key: key, ctx: ctx, sels: sels, rank: rank, seq: seq_counter}
         if dc.supports != "" { g.rank = rank }
         index[key] = g
         groups = append(groups, g)
@@ -1113,6 +1309,7 @@ fn compile_def(utilities: str, warn: []str) -> ([]*Group, []str) {
       dd := dc
       dd.important = important
       dd.supports = ""
+      dd.child = false
       dd.rank = urank
       dd.idx = di
       replaced := false
@@ -1138,6 +1335,50 @@ fn compile_def(utilities: str, warn: []str) -> ([]*Group, []str) {
     }
   }
   return groups, warn
+}
+
+# why a utility cannot be compiled safely ("" if it can). The values in [...] and (...) are written
+# into the stylesheet as they are, so a value must not be able to end its declaration or its rule
+# (";", "{", "}"), open a comment, or end an inline <style> ("<"); quotes, brackets and
+# parentheses must be balanced. ">" is a combinator in a variant's selector ([&>svg]:), never a
+# value; "\" only escapes an underscore (\_).
+export fn unsafe(tok: str) -> str {
+  stack := []int{}
+  quote := 0
+  parts := split_variants(tok)
+  value_from := len(tok) - len(parts[len(parts) - 1])
+  for i := 0; i < len(tok); i++ {
+    c := int(tok[i])
+    if c < 32 || c == 127 { return "a control character" }
+    if c == ';' || c == '{' || c == '}' || c == '<' { return "\"" + strings.from_byte(c) + "\" in it" }
+    if c == '>' && i >= value_from { return "\">\" in a value" }
+    if c == '\\' {
+      if i + 1 < len(tok) && int(tok[i + 1]) == '_' {
+        i++
+        continue
+      }
+      return "a backslash (only \\_ is allowed)"
+    }
+    if c == '/' && i + 1 < len(tok) && int(tok[i + 1]) == '*' { return "a comment" }
+    if c == '*' && i + 1 < len(tok) && int(tok[i + 1]) == '/' { return "a comment" }
+    if quote != 0 {
+      if c == quote { quote = 0 }
+      continue
+    }
+    if c == '\'' || c == '"' {
+      quote = c
+    } else if c == '[' || c == '(' {
+      stack = append(stack, c)
+    } else if c == ']' || c == ')' {
+      open := int('[')
+      if c == ')' { open = int('(') }
+      if len(stack) == 0 || stack[len(stack) - 1] != open { return "unbalanced brackets" }
+      stack = stack[0:len(stack) - 1]
+    }
+  }
+  if quote != 0 { return "an unclosed quote" }
+  if len(stack) > 0 { return "unbalanced brackets" }
+  return ""
 }
 
 # the utilities of a def with each @name replaced by the utilities of that def (recursively)
@@ -1180,6 +1421,8 @@ fn winners(tokens: []str) -> []str {
         }
       }
       if main == "" { main = decls[0].prop }
+      # the children's declarations (divide-black) do not conflict with the element's (border-black)
+      if decls[0].child { main = ">" + main }
       # border and outline set the style and the width: they are about the width (border-2 and
       # border-dashed do not conflict)
       if strings.has_suffix(main, "-style") {
@@ -1209,6 +1452,9 @@ export fn escape(name: str) -> str {
     word := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c >= 128
     if i == 0 && c >= '0' && c <= '9' {
       b.write("\\3" + strings.from_byte(c) + " ")
+    } else if c < 32 || c == 127 || c == '<' {
+      # as a code point: "\<" would still end an inline <style>
+      b.write("\\" + hex(c) + " ")
     } else if word {
       b.write_byte(c)
     } else {
@@ -1218,6 +1464,18 @@ export fn escape(name: str) -> str {
   }
   return b.string()
 }
+
+fn hex(n: int) -> str {
+  digits := "0123456789abcdef"
+  if n < 16 { return digits[n:n + 1] }
+  return digits[n / 16:n / 16 + 1] + digits[n % 16:n % 16 + 1]
+}
+
+# the stylesheet made safe to inline in an HTML <style> element: "</" becomes "<\\/" (the same
+# text in a CSS string; anywhere else it is not valid CSS anyway). Only the trusted parts (raw,
+# base selectors, theme values, custom variants) can have "<": the utilities refuse it.
+#   <style>{css.for_style_tag(sheets["home"])}</style>
+export fn for_style_tag(text: str) -> str { return strings.replace_all(text, "</", "<\\/") }
 
 struct Out {
   b: *strings.Builder
@@ -1450,7 +1708,7 @@ fn theme_order() -> []str {
 
 const PREFLIGHT = "  *, ::after, ::before, ::backdrop, ::file-selector-button {\n    box-sizing: border-box;\n    margin: 0;\n    padding: 0;\n    border: 0 solid;\n  }\n  html, :host {\n    line-height: 1.5;\n    -webkit-text-size-adjust: 100%;\n    tab-size: 4;\n    font-family: var(--default-font-family, -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, \"Helvetica Neue\", \"Noto Sans\", Arial, sans-serif, \"Apple Color Emoji\", \"Segoe UI Emoji\", \"Segoe UI Symbol\", \"Noto Color Emoji\");\n    font-feature-settings: var(--default-font-feature-settings, normal);\n    font-variation-settings: var(--default-font-variation-settings, normal);\n    -webkit-tap-highlight-color: transparent;\n  }\n  hr {\n    height: 0;\n    color: inherit;\n    border-top-width: 1px;\n  }\n  abbr:where([title]) {\n    -webkit-text-decoration: underline dotted;\n    text-decoration: underline dotted;\n  }\n  h1, h2, h3, h4, h5, h6 {\n    font-size: inherit;\n    font-weight: inherit;\n  }\n  a {\n    color: inherit;\n    -webkit-text-decoration: inherit;\n    text-decoration: inherit;\n  }\n  b, strong {\n    font-weight: bolder;\n  }\n  code, kbd, samp, pre {\n    font-family: var(--default-mono-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace);\n    font-feature-settings: var(--default-mono-font-feature-settings, normal);\n    font-variation-settings: var(--default-mono-font-variation-settings, normal);\n    font-size: 1em;\n  }\n  small {\n    font-size: 80%;\n  }\n  sub, sup {\n    font-size: 75%;\n    line-height: 0;\n    position: relative;\n    vertical-align: baseline;\n  }\n  sub {\n    bottom: -0.25em;\n  }\n  sup {\n    top: -0.5em;\n  }\n  table {\n    text-indent: 0;\n    border-color: inherit;\n    border-collapse: collapse;\n  }\n  :-moz-focusring:where(:not(iframe)) {\n    outline: auto;\n  }\n  progress {\n    vertical-align: baseline;\n  }\n  summary {\n    display: list-item;\n  }\n  ol, ul, menu {\n    list-style: none;\n  }\n  img, svg, video, canvas, audio, iframe, embed, object {\n    display: block;\n    vertical-align: middle;\n  }\n  img, video {\n    max-width: 100%;\n    height: auto;\n  }\n  button, input, select, optgroup, textarea, ::file-selector-button {\n    font: inherit;\n    font-feature-settings: inherit;\n    font-variation-settings: inherit;\n    letter-spacing: inherit;\n    color: inherit;\n    border-radius: 0;\n    background-color: transparent;\n    opacity: 1;\n  }\n  :where(select:is([multiple], [size])) optgroup {\n    font-weight: bolder;\n  }\n  :where(select:is([multiple], [size])) optgroup option {\n    padding-inline-start: 20px;\n  }\n  ::file-selector-button {\n    margin-inline-end: 4px;\n  }\n  ::placeholder {\n    opacity: 1;\n  }\n  @supports (not (-webkit-appearance: -apple-pay-button))  or (contain-intrinsic-size: 1px) {\n    ::placeholder {\n      color: currentcolor;\n      @supports (color: color-mix(in lab, red, red)) {\n        color: color-mix(in oklab, currentcolor 50%, transparent);\n      }\n    }\n  }\n  textarea {\n    resize: vertical;\n  }\n  ::-webkit-search-decoration {\n    -webkit-appearance: none;\n  }\n  ::-webkit-date-and-time-value {\n    min-height: 1lh;\n    text-align: inherit;\n  }\n  ::-webkit-datetime-edit {\n    display: inline-flex;\n  }\n  ::-webkit-datetime-edit-fields-wrapper {\n    padding: 0;\n  }\n  ::-webkit-datetime-edit, ::-webkit-datetime-edit-year-field, ::-webkit-datetime-edit-month-field, ::-webkit-datetime-edit-day-field, ::-webkit-datetime-edit-hour-field, ::-webkit-datetime-edit-minute-field, ::-webkit-datetime-edit-second-field, ::-webkit-datetime-edit-millisecond-field, ::-webkit-datetime-edit-meridiem-field {\n    padding-block: 0;\n  }\n  ::-webkit-calendar-picker-indicator {\n    line-height: 1;\n  }\n  :-moz-ui-invalid {\n    box-shadow: none;\n  }\n  button, input:where([type=\"button\"], [type=\"reset\"], [type=\"submit\"]), ::file-selector-button {\n    appearance: button;\n  }\n  ::-webkit-inner-spin-button, ::-webkit-outer-spin-button {\n    height: auto;\n  }\n  [hidden]:where(:not([hidden=\"until-found\"])) {\n    display: none !important;\n  }\n"
 
-const PROPERTIES = "@property --tw-animation-delay {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0s;\n}\n@property --tw-animation-direction {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: normal;\n}\n@property --tw-animation-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-animation-fill-mode {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: none;\n}\n@property --tw-animation-iteration-count {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --scroll-fade-t {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-b {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-s {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-e {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-mask {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-angle {\n  syntax: \"<angle>\";\n  inherits: true;\n  initial-value: 20deg;\n}\n@property --shimmer-image {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-text-fill {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-z {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-rotate-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-z {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-border-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-leading {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-font-weight {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-tracking {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-inset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-ring-inset {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-offset-width {\n  syntax: \"<length>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --tw-ring-offset-color {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: #fff;\n}\n@property --tw-ring-offset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-outline-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-backdrop-blur {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-brightness {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-contrast {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-grayscale {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-hue-rotate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-invert {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-opacity {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-saturate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-sepia {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ease {\n  syntax: \"*\";\n  inherits: false;\n}\n@layer properties {\n  @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {\n    :root, :host {\n      --shimmer-angle: 20deg;\n    }\n    *, ::before, ::after, ::backdrop {\n      --tw-translate-x: 0;\n      --tw-translate-y: 0;\n      --tw-translate-z: 0;\n      --tw-rotate-x: initial;\n      --tw-rotate-y: initial;\n      --tw-rotate-z: initial;\n      --tw-skew-x: initial;\n      --tw-skew-y: initial;\n      --tw-border-style: solid;\n      --tw-leading: initial;\n      --tw-font-weight: initial;\n      --tw-tracking: initial;\n      --tw-shadow: 0 0 #0000;\n      --tw-shadow-color: initial;\n      --tw-shadow-alpha: 100%;\n      --tw-inset-shadow: 0 0 #0000;\n      --tw-inset-shadow-color: initial;\n      --tw-inset-shadow-alpha: 100%;\n      --tw-ring-color: initial;\n      --tw-ring-shadow: 0 0 #0000;\n      --tw-inset-ring-color: initial;\n      --tw-inset-ring-shadow: 0 0 #0000;\n      --tw-ring-inset: initial;\n      --tw-ring-offset-width: 0px;\n      --tw-ring-offset-color: #fff;\n      --tw-ring-offset-shadow: 0 0 #0000;\n      --tw-outline-style: solid;\n      --tw-backdrop-blur: initial;\n      --tw-backdrop-brightness: initial;\n      --tw-backdrop-contrast: initial;\n      --tw-backdrop-grayscale: initial;\n      --tw-backdrop-hue-rotate: initial;\n      --tw-backdrop-invert: initial;\n      --tw-backdrop-opacity: initial;\n      --tw-backdrop-saturate: initial;\n      --tw-backdrop-sepia: initial;\n      --tw-duration: initial;\n      --tw-ease: initial;\n      --tw-animation-delay: 0s;\n      --tw-animation-direction: normal;\n      --tw-animation-duration: initial;\n      --tw-animation-fill-mode: none;\n      --tw-animation-iteration-count: 1;\n      --tw-enter-blur: 0;\n      --tw-enter-opacity: 1;\n      --tw-enter-rotate: 0;\n      --tw-enter-scale: 1;\n      --tw-enter-translate-x: 0;\n      --tw-enter-translate-y: 0;\n      --tw-exit-blur: 0;\n      --tw-exit-opacity: 1;\n      --tw-exit-rotate: 0;\n      --tw-exit-scale: 1;\n      --tw-exit-translate-x: 0;\n      --tw-exit-translate-y: 0;\n      --scroll-fade-t: 0px;\n      --scroll-fade-b: 0px;\n      --scroll-fade-s: 0px;\n      --scroll-fade-e: 0px;\n      --scroll-fade-mask: initial;\n      --shimmer-image: initial;\n      --shimmer-text-fill: initial;\n    }\n  }\n}\n"
+const PROPERTIES = "@property --tw-animation-delay {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0s;\n}\n@property --tw-animation-direction {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: normal;\n}\n@property --tw-animation-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-animation-fill-mode {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: none;\n}\n@property --tw-animation-iteration-count {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-enter-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-enter-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-blur {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-opacity {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-rotate {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-scale {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 1;\n}\n@property --tw-exit-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-exit-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --scroll-fade-t {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-b {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-s {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-e {\n  syntax: \"<length-percentage>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --scroll-fade-mask {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-angle {\n  syntax: \"<angle>\";\n  inherits: true;\n  initial-value: 20deg;\n}\n@property --shimmer-image {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --shimmer-text-fill {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-space-x-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-space-y-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-divide-x-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-divide-y-reverse {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-x {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-y {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-translate-z {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0;\n}\n@property --tw-rotate-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-rotate-z {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-x {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-skew-y {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-border-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-leading {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-font-weight {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-tracking {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-inset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-shadow-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-shadow-alpha {\n  syntax: \"<percentage>\";\n  inherits: false;\n  initial-value: 100%;\n}\n@property --tw-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-inset-ring-color {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-inset-ring-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-ring-inset {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ring-offset-width {\n  syntax: \"<length>\";\n  inherits: false;\n  initial-value: 0px;\n}\n@property --tw-ring-offset-color {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: #fff;\n}\n@property --tw-ring-offset-shadow {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: 0 0 #0000;\n}\n@property --tw-outline-style {\n  syntax: \"*\";\n  inherits: false;\n  initial-value: solid;\n}\n@property --tw-backdrop-blur {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-brightness {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-contrast {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-grayscale {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-hue-rotate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-invert {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-opacity {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-saturate {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-backdrop-sepia {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-duration {\n  syntax: \"*\";\n  inherits: false;\n}\n@property --tw-ease {\n  syntax: \"*\";\n  inherits: false;\n}\n@layer properties {\n  @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color:rgb(from red r g b)))) {\n    :root, :host {\n      --shimmer-angle: 20deg;\n    }\n    *, ::before, ::after, ::backdrop {\n      --tw-space-x-reverse: 0;\n      --tw-space-y-reverse: 0;\n      --tw-divide-x-reverse: 0;\n      --tw-divide-y-reverse: 0;\n      --tw-translate-x: 0;\n      --tw-translate-y: 0;\n      --tw-translate-z: 0;\n      --tw-rotate-x: initial;\n      --tw-rotate-y: initial;\n      --tw-rotate-z: initial;\n      --tw-skew-x: initial;\n      --tw-skew-y: initial;\n      --tw-border-style: solid;\n      --tw-leading: initial;\n      --tw-font-weight: initial;\n      --tw-tracking: initial;\n      --tw-shadow: 0 0 #0000;\n      --tw-shadow-color: initial;\n      --tw-shadow-alpha: 100%;\n      --tw-inset-shadow: 0 0 #0000;\n      --tw-inset-shadow-color: initial;\n      --tw-inset-shadow-alpha: 100%;\n      --tw-ring-color: initial;\n      --tw-ring-shadow: 0 0 #0000;\n      --tw-inset-ring-color: initial;\n      --tw-inset-ring-shadow: 0 0 #0000;\n      --tw-ring-inset: initial;\n      --tw-ring-offset-width: 0px;\n      --tw-ring-offset-color: #fff;\n      --tw-ring-offset-shadow: 0 0 #0000;\n      --tw-outline-style: solid;\n      --tw-backdrop-blur: initial;\n      --tw-backdrop-brightness: initial;\n      --tw-backdrop-contrast: initial;\n      --tw-backdrop-grayscale: initial;\n      --tw-backdrop-hue-rotate: initial;\n      --tw-backdrop-invert: initial;\n      --tw-backdrop-opacity: initial;\n      --tw-backdrop-saturate: initial;\n      --tw-backdrop-sepia: initial;\n      --tw-duration: initial;\n      --tw-ease: initial;\n      --tw-animation-delay: 0s;\n      --tw-animation-direction: normal;\n      --tw-animation-duration: initial;\n      --tw-animation-fill-mode: none;\n      --tw-animation-iteration-count: 1;\n      --tw-enter-blur: 0;\n      --tw-enter-opacity: 1;\n      --tw-enter-rotate: 0;\n      --tw-enter-scale: 1;\n      --tw-enter-translate-x: 0;\n      --tw-enter-translate-y: 0;\n      --tw-exit-blur: 0;\n      --tw-exit-opacity: 1;\n      --tw-exit-rotate: 0;\n      --tw-exit-scale: 1;\n      --tw-exit-translate-x: 0;\n      --tw-exit-translate-y: 0;\n      --scroll-fade-t: 0px;\n      --scroll-fade-b: 0px;\n      --scroll-fade-s: 0px;\n      --scroll-fade-e: 0px;\n      --scroll-fade-mask: initial;\n      --shimmer-image: initial;\n      --shimmer-text-fill: initial;\n    }\n  }\n}\n"
 
 fn keyframes(name: str) -> str {
   switch name {

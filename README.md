@@ -39,8 +39,14 @@ fn Card(p: CardProps) -> *ui.Node {
 
 The utilities are Tailwind CSS 4's, with the same declarations:
 
-- layout: `flex`, `grid`, `grid-cols-*`, `gap-*`, `items-*`, `justify-*`, `absolute`,
-  `inset-*`, `z-*`, `overflow-*`, `sr-only`...
+- layout: `flex`, `flex-row-reverse`, `flex-col-reverse`, `grid`, `grid-cols-*`, `gap-*`,
+  `items-*`, `justify-*`, `justify-items-*`, `justify-self-*`, `self-*`, `place-content-*`,
+  `place-items-*`, `place-self-*`, `absolute`, `inset-*`, `start-*` / `end-*`, `z-*`,
+  `overflow-*`, `aspect-*`, `line-clamp-*`, `truncate`, `invisible`, `isolate`, `sr-only`...
+- grid placement: `col-span-*`, `col-start-*`, `col-end-*`, `row-span-*`, `row-start-*`,
+  `row-end-*`, `col-*`, `row-*`, `grid-flow-*`, `auto-cols-*`, `auto-rows-*`;
+- between children: `space-x-*`, `space-y-*`, `divide-x`, `divide-y` (widths, colors, styles), and
+  their `-reverse`;
 - sizes and spacing: `w-*`, `h-*`, `size-*`, `min-*`, `max-*`, `p-*`, `m-*` (the spacing scale,
   fractions, `-` for negatives);
 - typography: `text-*` (sizes and colors), `font-*`, `leading-*`, `tracking-*`, `whitespace-*`,
@@ -56,11 +62,23 @@ The utilities are Tailwind CSS 4's, with the same declarations:
 Variants work as in Tailwind:
 
 - `hover:`, `focus-visible:`, `active:`, `disabled:`, `first:`, `last:`;
-- `sm:` … `2xl:`, `max-*:`, `dark:`, `motion-reduce:`, `supports-[...]:`;
+- `sm:` … `2xl:`, `max-*:`, `dark:` (see below), `motion-reduce:`, `supports-[...]:`;
 - `aria-*:`, `data-*:`, `has-*:`, `not-*:`, `in-*:`, `group-*:`, `peer-*:`;
 - `*:`, `**:`, `[&_svg]:` and other arbitrary selectors.
 
 `hover:` applies only where hovering exists (`@media (hover: hover)`), as in Tailwind 4.
+
+`dark:` applies inside an element with the class `dark` (`&:is(.dark *)`), as Tailwind's default.
+To follow the system instead, call `style.dark_mode("media")` before compiling: `dark:` becomes
+`@media (prefers-color-scheme: dark)` (`style.dark_mode("selector")` goes back). A custom variant
+can be an at-rule too: `style.custom_variant("tall", "@media (height >= 50rem)")`. With it, a
+palette that changes with the system needs no raw CSS:
+
+```caju
+style.dark_mode("media")
+style.base(":root", "[--background:#fbf6ef] [--foreground:#1e1712] dark:[--background:#14100d] dark:[--foreground:#f7ede2]")
+style.theme_inline_value("color-background", "var(--background)")
+```
 `tools/check.sh` compares the output with Tailwind's, utility by utility, on the 595 utilities of
 a real site (`testdata/`), and all of them match.
 
@@ -76,7 +94,8 @@ a real site (`testdata/`), and all of them match.
 | `style.raw(css)` | CSS written as is (`@font-face`, the palette's custom properties) |
 | `style.theme(name, value)` | a theme value, used as `var(--name)` (`"color-brand"`, `"font-sans"`) |
 | `style.theme_inline_value(name, value)` | a theme value written into the rules themselves |
-| `style.custom_variant(name, selectors)` | a variant: `"data-open"`, `"&:where([data-state=\"open\"])"` |
+| `style.custom_variant(name, selectors)` | a variant: `"data-open"`, `"&:where([data-state=\"open\"])"`; or an at-rule, alone: `"@media (...)"` |
+| `style.dark_mode(strategy)` | how `dark:` applies: `"media"` (the system's preference) or `"selector"` (`.dark`, the default) |
 | `style.sheet(name) -> str` | the defs that follow go to their own stylesheet (a page's styles) |
 | `style.registry()` | everything registered, for the compiler |
 
@@ -87,7 +106,9 @@ a real site (`testdata/`), and all of them match.
 | `css.compile(style.registry()) -> str` | the stylesheet |
 | `css.compile_sheets(style.registry()) -> map[str]str` | split by `style.sheet`: `""` is the main one, each other has just its classes |
 | `css.minify(text) -> str` | without indentation, line breaks and comments |
-| `css.unknown(style.registry()) -> []str` | the utilities it does not know, as `"def: utility"` |
+| `css.unknown(style.registry()) -> []str` | the utilities it does not know or refuses, as `"def: utility"` (`"def: utility (refused: why)"`) |
+| `css.unsafe(utility) -> str` | why a utility is refused (`""` if it is not), see below |
+| `css.for_style_tag(text) -> str` | the stylesheet made safe to inline in a `<style>` element (`</` becomes `<\/`) |
 
 A build step writes the stylesheet after importing the program, so every `style.def` has run:
 
@@ -104,6 +125,24 @@ reg := style.registry()
 for _, w := range css.unknown(reg) { os.eprintln("unknown utility in " + w) }
 fs.write_file("public/site.css", css.minify(css.compile(reg)), 420)
 ```
+
+## Untrusted values
+
+The values in brackets (`w-[...]`, `content-[...]`, `[prop:value]`, `supports-[...]:`, `data-[...]:`)
+are written into the stylesheet as they are, so a utility that could end its declaration or its
+rule, or end an inline `<style>`, is refused: it is left out of the stylesheet and `css.unknown`
+reports it with the reason. A utility is refused when it has
+
+- `;`, `{`, `}` or `<`, or a control character;
+- `>` in the value (it stays allowed in a variant's selector: `[&>svg]:`, `has-[>img]:`);
+- `\` other than `\_` (an underscore), or a comment (`/*`, `*/`);
+- unbalanced quotes, brackets or parentheses.
+
+So `w-[1px;}body{display:none}]` and `before:content-['</style><script>…']` produce nothing. Class
+names are escaped (`<` as `\3c `). The arguments of `style.raw`, `style.base`'s selector,
+`style.theme` / `style.theme_inline_value` and `style.custom_variant` are trusted by definition:
+they are written as they are, so they must come from the program, never from user input. When
+the stylesheet is inlined in a page's `<style>`, pass it through `css.for_style_tag`.
 
 ## Composing
 
